@@ -1,0 +1,111 @@
+name: Build VST3 (Windows, Linux)
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DELUKKA_COPY_PLUGIN_AFTER_BUILD=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --target ElukkaSynth_VST3 ElukkaTest --parallel
+
+      - name: Check architecture and bundle layout
+        shell: pwsh
+        run: |
+          $dll = "build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3/Contents/x86_64-win/ElukkaSynth.vst3"
+          if (!(Test-Path $dll)) { throw "VST3 binary missing: $dll" }
+          $bytes = [IO.File]::ReadAllBytes($dll)
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne 0x8664) { throw ("Not an x64 binary (machine = 0x{0:X})" -f $machine) }
+          "x64 PE confirmed"
+          Get-ChildItem -Recurse "build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3" | Select-Object FullName
+
+      - name: Package
+        shell: bash
+        run: scripts/package.sh windows build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3 dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ElukkaSynth-Windows-x64
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - name: Run offline test suite
+        run: build/ElukkaTest_artefacts/Release/ElukkaTest.exe
+
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config zip xvfb \
+            libasound2-dev libfreetype-dev libfontconfig1-dev \
+            libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libgl1-mesa-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DELUKKA_COPY_PLUGIN_AFTER_BUILD=OFF
+
+      - name: Build
+        run: cmake --build build --target ElukkaSynth_VST3 ElukkaTest --parallel
+
+      - name: Check architecture, bundle layout and dynamic dependencies
+        run: |
+          so=build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3/Contents/x86_64-linux/ElukkaSynth.so
+          test -f "$so"
+          file "$so" | tee /dev/stderr | grep -q "x86-64"
+          find build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3 -type f
+          echo "--- shared library dependencies ---"
+          ldd "$so"
+          echo "--- highest glibc symbol version required ---"
+          objdump -T "$so" | grep -o 'GLIBC_[0-9.]*' | sort -t. -k2,2n -k3,3n -u | tail -1
+
+      - name: Package
+        run: scripts/package.sh linux build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3 dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ElukkaSynth-Linux-x64
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - name: Run offline test suite
+        run: xvfb-run -a build/ElukkaTest_artefacts/Release/ElukkaTest
+
+  release:
+    name: GitHub release (tags only)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create release and attach ZIPs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/*.zip --repo "${GITHUB_REPOSITORY}" --title "ElukkaSynth ${GITHUB_REF_NAME} (beta)" --generate-notes

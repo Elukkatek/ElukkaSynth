@@ -1,0 +1,16 @@
+# build output
+build/
+build-*/
+cmake-build-*/
+dist/
+*.vst3
+*.zip
+
+# large local-only listening test renders
+ListeningTests/
+
+# editors / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
