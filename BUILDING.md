@@ -61,9 +61,10 @@ the VC++ redistributable. Plugin copying after build is off by default on Window
 ```bash
 scripts/package.sh windows build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3 dist
 scripts/package.sh linux   build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3 dist
+scripts/package.sh macos   build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3 dist   # on a Mac
 ```
 
-This writes `dist/ElukkaSynth-v<version>-<Windows|Linux>-x64.zip` containing the bundle and a
+This writes `dist/ElukkaSynth-v<version>-<Windows-x64|Linux-x64|macOS-universal>.zip` containing the bundle and a
 tester README (`packaging/README-*.txt`). The version comes from `project(... VERSION)` in
 `CMakeLists.txt`.
 
@@ -72,4 +73,9 @@ tester README (`packaging/README-*.txt`). The version comes from `project(... VE
 `.github/workflows/build.yml` builds Windows x64 (MSVC 2022) and Linux x64 (Ubuntu 22.04, GCC) on
 every push, checks the architecture and bundle layout, uploads the two ZIPs as workflow artifacts
 and runs `ElukkaTest`. Pushing a tag such as `v1.0.0` additionally creates a GitHub release with the
-ZIPs attached. macOS is built locally as before and is not part of CI.
+ZIPs attached (marked as a pre-release). macOS is built and packaged locally as before, is not part of CI, and
+its ZIP is added to the release by hand:
+
+```bash
+gh release upload v<tag> dist/ElukkaSynth-v<version>-macOS-universal.zip
+```

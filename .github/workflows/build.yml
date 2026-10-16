@@ -121,4 +121,4 @@ jobs:
       - name: Create release and attach ZIPs
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/*.zip --repo "${GITHUB_REPOSITORY}" --title "ElukkaSynth ${GITHUB_REF_NAME} (beta)" --generate-notes
+        run: gh release create "${GITHUB_REF_NAME}" dist/*.zip --repo "${GITHUB_REPOSITORY}" --title "ElukkaSynth ${GITHUB_REF_NAME}" --prerelease --notes "Beta build. Windows x64 and Linux x64 VST3 attached by CI; the macOS universal VST3 is built locally and uploaded separately. Each ZIP contains a README with installation steps."

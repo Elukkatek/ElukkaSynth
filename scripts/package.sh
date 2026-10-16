@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Packages a built ElukkaSynth VST3 bundle into a beta ZIP for testers.
 #
-#   scripts/package.sh <windows|linux> <path/to/ElukkaSynth.vst3> <output-dir>
+#   scripts/package.sh <windows|linux|macos> <path/to/ElukkaSynth.vst3> <output-dir>
 #
-# Produces <output-dir>/ElukkaSynth-v<version>-<Windows|Linux>-x64.zip containing
+# Produces <output-dir>/ElukkaSynth-v<version>-<Windows-x64|Linux-x64|macOS-universal>.zip containing
 #   ElukkaSynth.vst3/   (the bundle, unchanged)
 #   README.txt          (install instructions from packaging/README-<platform>.txt)
 # The version is read from project(... VERSION x.y.z) in CMakeLists.txt.
@@ -11,7 +11,7 @@ set -euo pipefail
 
 platform="${1:-}"; bundle="${2:-}"; outdir="${3:-}"
 if [[ -z "$platform" || -z "$bundle" || -z "$outdir" ]]; then
-    echo "usage: $0 <windows|linux> <path/to/ElukkaSynth.vst3> <output-dir>" >&2; exit 2
+    echo "usage: $0 <windows|linux|macos> <path/to/ElukkaSynth.vst3> <output-dir>" >&2; exit 2
 fi
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,17 +19,22 @@ version="$(sed -n 's/^project(ElukkaSynth VERSION \([0-9.]*\).*/\1/p' "$root/CMa
 [[ -n "$version" ]] || { echo "could not read version from CMakeLists.txt" >&2; exit 1; }
 
 case "$platform" in
-    windows) label="Windows"; binary="Contents/x86_64-win/ElukkaSynth.vst3" ;;
-    linux)   label="Linux";   binary="Contents/x86_64-linux/ElukkaSynth.so" ;;
-    *) echo "unknown platform '$platform' (expected windows or linux)" >&2; exit 2 ;;
+    windows) label="Windows-x64"; binary="Contents/x86_64-win/ElukkaSynth.vst3" ;;
+    linux)   label="Linux-x64";   binary="Contents/x86_64-linux/ElukkaSynth.so" ;;
+    macos)   label="macOS-universal"; binary="Contents/MacOS/ElukkaSynth" ;;
+    *) echo "unknown platform '$platform' (expected windows, linux or macos)" >&2; exit 2 ;;
 esac
 
 # sanity-check the bundle layout before packaging it
 [[ -d "$bundle" ]] || { echo "bundle not found: $bundle" >&2; exit 1; }
 [[ -f "$bundle/$binary" ]] || { echo "missing $binary inside $bundle" >&2; exit 1; }
 [[ -f "$bundle/Contents/Resources/moduleinfo.json" ]] || echo "warning: no Contents/Resources/moduleinfo.json in bundle" >&2
+if [[ "$platform" == macos ]]; then
+    archs="$(lipo -archs "$bundle/$binary")"
+    [[ "$archs" == *x86_64* && "$archs" == *arm64* ]] || { echo "macOS binary is not universal (archs: $archs)" >&2; exit 1; }
+fi
 
-name="ElukkaSynth-v${version}-${label}-x64"
+name="ElukkaSynth-v${version}-${label}"
 stage="$outdir/$name"
 rm -rf "$stage"; mkdir -p "$stage"
 cp -R "$bundle" "$stage/ElukkaSynth.vst3"
