@@ -92,4 +92,9 @@ if(ELUKKA_BUILD_TESTS)
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_recommended_config_flags)
+    if(MSVC)
+        # The test's main() keeps many large buffers on the stack; Windows' default 1 MB main-thread
+        # stack is too small for it (macOS and Linux give 8 MB).
+        target_link_options(ElukkaTest PRIVATE /STACK:16777216)
+    endif()
 endif()
