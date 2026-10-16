@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ElukkaSynth</title>
+  <meta name="description" content="ElukkaSynth — a free additive / resynthesis synthesizer plugin (VST3) for macOS, Windows and Linux.">
+  <style>
+    :root { --bg: #14151a; --panel: #1e2029; --text: #ececf1; --muted: #9a9db0; --accent: #f2b544; --border: #30333f; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    main { max-width: 640px; margin: 0 auto; padding: 64px 20px 48px; text-align: center; }
+    h1 { font-size: 44px; margin: 0 0 8px; letter-spacing: -0.5px; }
+    .tag { color: var(--accent); font-weight: 600; letter-spacing: 1px; text-transform: uppercase; font-size: 13px; }
+    p { color: var(--muted); margin: 16px 0; }
+    .buttons { display: flex; flex-direction: column; gap: 12px; margin: 36px 0 20px; }
+    .btn { display: block; padding: 16px 20px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; color: var(--text); text-decoration: none; font-weight: 600; font-size: 18px; }
+    .btn small { display: block; color: var(--muted); font-weight: 400; font-size: 14px; margin-top: 2px; }
+    .btn:hover { border-color: var(--accent); }
+    .links a { color: var(--accent); text-decoration: none; }
+    .links a:hover { text-decoration: underline; }
+    .fine { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="tag">Beta 1 · v1.0.0</div>
+    <h1>ElukkaSynth</h1>
+    <p>A free additive and resynthesis synthesizer. Build sounds from hundreds of partials,
+       resynthesize audio files and images, and shape them with unison, tuning, a step sequencer
+       and reverb. VST3 instrument for macOS, Windows and Linux.</p>
+
+    <div class="buttons">
+      <a class="btn" href="https://github.com/Elukkatek/ElukkaSynth/releases/download/v1.0.0-beta1/ElukkaSynth-v1.0.0-macOS-universal.zip">
+        Download for macOS <small>Universal (Apple Silicon + Intel), macOS 11+</small>
+      </a>
+      <a class="btn" href="https://github.com/Elukkatek/ElukkaSynth/releases/download/v1.0.0-beta1/ElukkaSynth-v1.0.0-Windows-x64.zip">
+        Download for Windows <small>64-bit, Windows 10 / 11</small>
+      </a>
+      <a class="btn" href="https://github.com/Elukkatek/ElukkaSynth/releases/download/v1.0.0-beta1/ElukkaSynth-v1.0.0-Linux-x64.zip">
+        Download for Linux <small>x86-64, glibc 2.35+ (Ubuntu 22.04 or newer)</small>
+      </a>
+    </div>
+
+    <p class="links">
+      <a href="https://github.com/Elukkatek/ElukkaSynth">Source code on GitHub</a> ·
+      <a href="https://github.com/Elukkatek/ElukkaSynth/releases/tag/v1.0.0-beta1">Release notes</a>
+    </p>
+    <p class="fine">Each download contains the plugin and a README with installation steps.
+       This is a beta: please report problems on GitHub.</p>
+  </main>
+</body>
+</html>
