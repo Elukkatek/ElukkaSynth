@@ -44,8 +44,18 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+      - name: Load the built VST3 like a host would
+        shell: bash
+        run: build/ElukkaTest_artefacts/Release/ElukkaTest.exe --host build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3
+
       - name: Run offline test suite
-        run: build/ElukkaTest_artefacts/Release/ElukkaTest.exe
+        shell: bash
+        run: |
+          set +e
+          build/ElukkaTest_artefacts/Release/ElukkaTest.exe
+          code=$?
+          echo "ElukkaTest exit code: $code"
+          exit $code
 
   linux:
     name: Linux x64
@@ -89,6 +99,9 @@ jobs:
           name: ElukkaSynth-Linux-x64
           path: dist/*.zip
           if-no-files-found: error
+
+      - name: Load the built VST3 like a host would
+        run: xvfb-run -a build/ElukkaTest_artefacts/Release/ElukkaTest --host build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3
 
       - name: Run offline test suite
         run: xvfb-run -a build/ElukkaTest_artefacts/Release/ElukkaTest
