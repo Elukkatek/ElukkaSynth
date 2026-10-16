@@ -28,7 +28,7 @@ void SeqPattern::fromTree (const juce::ValueTree& t)
     startStep = juce::jlimit (0, maxSteps - 1, (int) t.getProperty ("startStep", 0));
     auto s = t["steps"].toString();
     for (int i = 0; i < maxSteps; ++i)
-        steps[(size_t) i] = i < s.length() ? (StepType) juce::jlimit (0, 2, s[i] - '0') : StepType::Note;
+        steps[(size_t) i] = i < s.length() ? (StepType) juce::jlimit (0, 2, (int) (s[i] - '0')) : StepType::Note;
 
     auto tokens = juce::StringArray::fromTokens (t["pitches"].toString(), " ", "");
     for (int i = 0; i < maxSteps; ++i)

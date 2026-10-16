@@ -653,7 +653,7 @@ void ResynthData::analysePitch (ResynthData& d, const float* mono, int len, doub
     }
     if (eMax <= 0.0f) return;
 
-    constexpr int maxN = 40;
+    static constexpr int maxN = 40;   // static: MSVC needs no lambda capture for it
     struct Part { float hz, w; int slot; bool used; };
     struct Note { float hz, w; int event = -1; };   // w = score (matched partial weight after the series penalty)
     struct Match { int n; float wm, m; };

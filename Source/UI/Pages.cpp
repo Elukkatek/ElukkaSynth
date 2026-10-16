@@ -1050,7 +1050,7 @@ void ResynthPage::loadAudioFile (const juce::File& file)
     fm.registerBasicFormats();
     std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (file));
     if (reader == nullptr) { info.setText ("Could not read " + file.getFileName(), juce::dontSendNotification); return; }
-    const int len = (int) juce::jmin<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 30.0));
+    const int len = (int) juce::jmin (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 30.0));
     juce::AudioBuffer<float> buf ((int) reader->numChannels, len);
     reader->read (&buf, 0, len, 0, true, true);
     if (auto d = ResynthData::fromAudio (buf, reader->sampleRate, file.getFileName()))
