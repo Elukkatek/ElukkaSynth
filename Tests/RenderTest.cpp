@@ -2939,6 +2939,10 @@ int main (int argc, char** argv)
             setP (q, "sh_smooth", 0.0f); setP (q, "sh_syncRate", (float) P::syncRateIndex (0.25f));   // 1/16
             setP (q, "mx1_src", (float) P::SrcSH); setP (q, "mx1_dst", (float) P::DstResPos); setP (q, "mx1_amt", 1.0f);
             q.setResynth (ResynthData::fromAudio (longTone, sr, "long"));
+            // Fixed S&H values: an unseeded juce::Random is seeded from the clock, and about 2% of seeds draw a
+            // value above 0.999 (the restart loops round within the block, so it reads as a non-exact jump) or two
+            // consecutive values within 0.02 (a small backwards restart that reads as a non-advancing block).
+            q.seedRandom (1);
             q.prepareToPlay (sr, block);
             juce::AudioBuffer<float> buf (2, block);
             ph.playing = true; ph.ppq = 0.0; ph.bpm = 120.0;
