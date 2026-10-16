@@ -44,6 +44,18 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+      - name: Diagnose test executable
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse build/ElukkaTest_artefacts | Select-Object FullName, Length
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = & $vswhere -latest -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
+          "dumpbin: $dumpbin"
+          & $dumpbin /dependents build/ElukkaTest_artefacts/Release/ElukkaTest.exe
+          & $dumpbin /headers build/ElukkaTest_artefacts/Release/ElukkaTest.exe | Select-String "subsystem|stack|machine"
+          & $dumpbin /dependents build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3/Contents/x86_64-win/ElukkaSynth.vst3
+          cmd /c "build\ElukkaTest_artefacts\Release\ElukkaTest.exe --host build\ElukkaSynth_artefacts\Release\VST3\ElukkaSynth.vst3 & echo cmd errorlevel=%ERRORLEVEL%"
+
       - name: Load the built VST3 like a host would
         shell: bash
         run: build/ElukkaTest_artefacts/Release/ElukkaTest.exe --host build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3
