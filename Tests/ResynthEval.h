@@ -193,7 +193,7 @@ inline float spectralDistanceChannel (const juce::AudioBuffer<float>& a, const j
         return m;
     };
     const auto ma = chanOf (a), mb = chanOf (b);
-    constexpr int numBands = 48;
+    static constexpr int numBands = 48;   // static: MSVC needs no lambda capture for it
     double total = 0.0;
     int resolutions = 0;
     for (int order : orders)
@@ -259,7 +259,7 @@ inline float flatnessErrorChannel (const juce::AudioBuffer<float>& a, const juce
     juce::dsp::FFT fft (order);
     std::vector<float> w ((size_t) N), xa ((size_t) N * 2), xb ((size_t) N * 2);
     juce::dsp::WindowingFunction<float>::fillWindowingTables (w.data(), (size_t) N, juce::dsp::WindowingFunction<float>::hann, false);
-    constexpr int numBands = 16;
+    static constexpr int numBands = 16;   // static: MSVC needs no lambda capture for it
     std::vector<int> bandOf ((size_t) N / 2, -1);
     for (int k = 1; k < N / 2; ++k)
     {
@@ -317,7 +317,7 @@ inline float widthError (const juce::AudioBuffer<float>& a, const juce::AudioBuf
     juce::dsp::FFT fft (order);
     std::vector<float> w ((size_t) N);
     juce::dsp::WindowingFunction<float>::fillWindowingTables (w.data(), (size_t) N, juce::dsp::WindowingFunction<float>::hann, false);
-    constexpr int numBands = 12;
+    static constexpr int numBands = 12;   // static: MSVC needs no lambda capture for it
     std::vector<int> bandOf ((size_t) N / 2, -1);
     for (int k = 1; k < N / 2; ++k)
     {
