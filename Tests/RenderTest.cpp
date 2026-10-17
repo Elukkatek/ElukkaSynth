@@ -688,17 +688,17 @@ int main (int argc, char** argv)
         std::cout << (rootOk ? "ok   " : "FAIL ") << "Detected pitch " << juce::String (data->detectedFundamentalHz, 2)
                   << " Hz (share " << juce::String (data->pitchConfidence, 2) << "), " << data->numNoteEvents << " note event\n";
 
-        // Tune 100% at middle C: the whole tone moves to C2, 9 semitones down (every partial by the same ratio, so the
-        // inharmonic spacing stays): 220 -> 130.8, 331.7 -> 197.2, 1234.5 -> 734.1 Hz; nothing left at 220 Hz
+        // Tune 100% at middle C: the whole tone moves to the nearest C, C3, 3 semitones up (every partial by the same
+        // ratio, so the inharmonic spacing stays): 220 -> 261.6, 331.7 -> 394.5, 1234.5 -> 1468.0 Hz; nothing left at 220 Hz
         setP (rp, "rs_tune", 100.0f);
         out = renderNotes (rp, { 60 }, 2.0);
-        const float ratio3 = std::exp2 (-9.0f / 12.0f);
+        const float ratio3 = std::exp2 (3.0f / 12.0f);
         auto at = [&] (float hz) { return juce::Decibels::gainToDecibels (measure (out, 0, hz).first, -120.0f); };
         float worstTuned = 0.0f;
         for (auto& pt : parts) worstTuned = std::max (worstTuned, std::abs (1200.0f * std::log2 (measure (out, 0, pt.hz * ratio3).second / (pt.hz * ratio3))));
         const bool tunedOk = worstTuned < 2.0f && at (220.0f) < -50.0f;   // only the residual's noise floor may remain at 220 Hz
         if (! tunedOk) ++failures;
-        std::cout << (tunedOk ? "ok   " : "FAIL ") << "Tune 100%: every partial down 9 semitones (A2 -> C2), worst error " << juce::String (worstTuned, 2)
+        std::cout << (tunedOk ? "ok   " : "FAIL ") << "Tune 100%: every partial up 3 semitones (A2 -> C3), worst error " << juce::String (worstTuned, 2)
                   << " c (220 Hz -> " << juce::String (measure (out, 0, 220.0f * ratio3).second, 1) << " Hz), level left at 220 Hz " << juce::String (at (220.0f), 1) << " dB\n";
 
         // Playing an octave up doubles every partial
@@ -1984,7 +1984,7 @@ int main (int argc, char** argv)
         }
     }
 
-    // ---- Sample tuning: pitch detection; Tune 100% moves every note to the key's pitch class in the first note's octave ----
+    // ---- Sample tuning: pitch detection; Tune 100% moves every note to the nearest note of the key's pitch class ----
     {
         auto tp = std::make_unique<ElukkaAudioProcessor>();
         auto& q = *tp;
@@ -2002,13 +2002,13 @@ int main (int argc, char** argv)
         auto cents = [] (float a, float b) { return 1200.0f * std::log2 (a / b); };
         auto midiOf = [] (float hz) { return 69.0f + 12.0f * std::log2 (hz / 440.0f); };
         auto hzOf = [] (float midi) { return 440.0f * std::exp2 ((midi - 69.0f) / 12.0f); };
-        // where Tune 100% puts every note of a source whose first note is `firstHz` when MIDI key `key` is played: the key's
-        // pitch class in the octave of the first note's nearest semitone, moved by the key's octave from middle C
-        // (written out independently of the engine)
-        auto collapsed = [&] (float firstHz, int key)
+        // where Tune 100% puts a note of `hz` when MIDI key `key` is played: the nearest note of the key's pitch class
+        // (halfway goes up), moved by the key's octave from middle C (written out independently of the engine)
+        auto nearest = [&] (float hz, int key)
         {
-            const int keyOctave = (int) std::floor (key / 12.0) - 5, keyClass = key - 12 * (keyOctave + 5);
-            return hzOf (12.0f * std::floor (std::round (midiOf (firstHz)) / 12.0f) + (float) keyClass + 12.0f * (float) keyOctave);
+            const int keyOctave = (int) std::floor ((key - 60) / 12.0), keyClass = key - 12 * keyOctave;   // 60..71
+            const float m = midiOf (hz);
+            return hzOf ((float) keyClass + 12.0f * std::floor ((m - (float) keyClass) / 12.0f + 0.5f) + 12.0f * (float) keyOctave);
         };
         // Independent pitch estimate: normalised autocorrelation of channel 0 over `len` samples from `start`.
         auto acfPitch = [&] (const juce::AudioBuffer<float>& b, int start, int len, float loHz, float hiHz)
@@ -2058,7 +2058,7 @@ int main (int argc, char** argv)
                 auto d = ResynthData::fromAudio (makeTone (2.5, [hz] (float t) { return 0.3f * std::sin (juce::MathConstants<float>::twoPi * hz * t); }), sr, "sine");
                 const float detErr = cents (d->detectedFundamentalHz, hz);
                 auto out = renderTuned (d, 60, 100.0f, 2.0);
-                const float target = collapsed (hz, 60), tuneErr = cents (measure (out, 0, target).second, target);
+                const float target = nearest (hz, 60), tuneErr = cents (measure (out, 0, target).second, target);
                 ok &= std::abs (detErr) < 2.0f && std::abs (tuneErr) < 2.0f && d->pitchConfidence > 0.9f;
                 rep << (int) hz << " Hz: " << juce::String (detErr, 1) << " c, tuned " << juce::String (tuneErr, 1) << " c; ";
             }
@@ -2085,7 +2085,7 @@ int main (int argc, char** argv)
         }
 
         // Test C + E + G: a harmonic tone (8 harmonics) at G3 +4 c with 5.5 Hz vibrato of +-20 c. Detection within 5 c;
-        // Tune 100% puts it on C3 (its own octave) and keeps the vibrato; other keys and Tune 50% land where the maths says
+        // Tune 100% puts it on C4 (the nearest C) and keeps the vibrato; other keys and Tune 50% land where the maths says
         // (independent autocorrelation estimate, median over the sustain, within 2 c).
         {
             const float base = 196.5f;
@@ -2107,11 +2107,11 @@ int main (int argc, char** argv)
             const float srcMedian = pitchTrack (vib, 150.0f, 600.0f, excSrc);
             auto out = renderTuned (dv, 60, 100.0f, 2.0);
             const float outMedian = pitchTrack (out, 90.0f, 400.0f, excOut);
-            const float medErr = cents (outMedian, 130.81f), srcMedErr = cents (srcMedian, base);
+            const float medErr = cents (outMedian, 261.63f), srcMedErr = cents (srcMedian, base);
             const bool vibOk = std::abs (detErr) < 5.0f && std::abs (medErr - srcMedErr) < 3.0f && std::abs (excOut - excSrc) < 0.25f * excSrc;
             if (! vibOk) ++failures;
             std::cout << (vibOk ? "ok   " : "FAIL ") << "Tuning C/E, harmonic tone with vibrato: detected " << juce::String (detErr, 1) << " c off; Tune 100% median pitch "
-                      << juce::String (medErr, 1) << " c from C3 (source measured " << juce::String (srcMedErr, 1) << " c from its nominal), vibrato excursion "
+                      << juce::String (medErr, 1) << " c from C4 (source measured " << juce::String (srcMedErr, 1) << " c from its nominal), vibrato excursion "
                       << juce::String (excOut, 0) << " c vs source " << juce::String (excSrc, 0) << " c\n";
 
             auto steady = makeTone (2.5, harm (0.0f));
@@ -2119,20 +2119,20 @@ int main (int argc, char** argv)
             bool ok = true;
             juce::String rep;
             float exc = 0.0f;
-            // the key's pitch class in the tone's octave, moved by the key's octave from middle C: C4 puts the G3 tone on
-            // C3, C2 on C1, C5 on C4; G4 on G3, G3 on G2
+            // the nearest note of the key's pitch class, moved by the key's octave from middle C: C4 puts the G3 tone on
+            // C4, C2 on C2, C5 on C5; G4 on G3, G3 on G2
             for (int note : { 36, 55, 60, 67, 72 })
             {
-                const float target = collapsed (base, note);
+                const float target = nearest (base, note);
                 const float err = cents (pitchTrack (renderTuned (ds, note, 100.0f, 2.0), target * 0.7f, target * 1.4f, exc), target);
                 ok &= std::abs (err) < 2.0f;
                 rep << "key " << note << " -> " << juce::String (target, 1) << " Hz " << juce::String (err, 1) << " c; ";
             }
             // Tune 50%: half the cents; Fine +25 c on top
-            const float half = std::sqrt (base * collapsed (base, 60));
+            const float half = std::sqrt (base * nearest (base, 60));
             const float errHalf = cents (pitchTrack (renderTuned (ds, 60, 50.0f, 2.0), half * 0.7f, half * 1.4f, exc), half);
             setP (q, "o1_fine", 25.0f);
-            const float fineTarget = 130.81f * std::exp2 (25.0f / 1200.0f);
+            const float fineTarget = 261.63f * std::exp2 (25.0f / 1200.0f);
             const float errFine = cents (pitchTrack (renderTuned (ds, 60, 100.0f, 2.0), fineTarget * 0.7f, fineTarget * 1.4f, exc), fineTarget);
             setP (q, "o1_fine", 0.0f);
             ok &= std::abs (errHalf) < 2.0f && std::abs (errFine) < 2.0f;
@@ -2204,8 +2204,8 @@ int main (int argc, char** argv)
             return v;
         };
 
-        // Test I: a melody of separate notes (C#3 D#3 F3 G3 A3 B3, 0.4 s each). The first note is C#3, so key C puts
-        // every note on C3 and key D every note on D3. Each note measured on its own.
+        // Test I: a melody of separate notes (C#3 D#3 F3 G3 A3 B3, 0.4 s each). Key C puts each on its nearest C
+        // (C3 C3 C3 C4 C4 C4), key D on its nearest D (D3 D3 D3 D3 D4 D4). Each note measured on its own.
         {
             const float melody[] { 138.59f, 155.56f, 174.61f, 196.0f, 220.0f, 246.94f };
             const double segSec = 0.4;
@@ -2226,7 +2226,7 @@ int main (int argc, char** argv)
                 rep << "key " << (key == 60 ? "C" : "D") << ":";
                 for (int seg = 0; seg < 6; ++seg)
                 {
-                    const float target = collapsed (melody[0], key);
+                    const float target = nearest (melody[seg], key);
                     const float err = cents (segmentPitch (out, seg, segSec, 100.0f, 600.0f), target);
                     ok &= std::abs (err) < 2.0f;
                     rep << " " << juce::String (target, 0) << "Hz " << juce::String (err, 1) << "c";
@@ -2238,8 +2238,8 @@ int main (int argc, char** argv)
                       << juce::String (d->firstNoteMidi, 2) << "): " << rep << "\n";
         }
 
-        // Test J: chord progression (two-note chords E3+G#3, F3+A3, D3+B3, 0.5 s each). The first note is E3 (the lower
-        // of the first chord), so key C puts both notes of every chord on C3: they move by different amounts.
+        // Test J: chord progression (two-note chords E3+G#3, F3+A3, D3+B3, 0.5 s each). Key C moves each note of every
+        // chord to its own nearest C (the lower notes to C3, the upper to C4): different amounts within one chord.
         {
             struct Chord { float lo, hi; };
             const Chord chords[] { { 164.81f, 207.65f }, { 174.61f, 220.0f }, { 146.83f, 246.94f } };
@@ -2280,7 +2280,7 @@ int main (int argc, char** argv)
             {
                 for (float hz : { chords[seg].lo, chords[seg].hi })
                 {
-                    const float target = collapsed (chords[0].lo, 60);
+                    const float target = nearest (hz, 60);
                     const auto [db, f] = peakIn (out, seg, target);
                     const float err = cents (f, target);
                     // what remains at the original pitch: the analysis blurs each chord change for ~0.1 s, and those
@@ -2295,9 +2295,9 @@ int main (int argc, char** argv)
             std::cout << (ok ? "ok   " : "FAIL ") << "Tuning J, chord progression (" << d->numNoteEvents << " note events): " << rep << "\n";
         }
 
-        // Test K: overlapping notes. A3 (220 Hz) sustains 0-1.5 s; E4 (329.6 Hz) joins at 0.75 s. The first note is A3,
-        // so key C puts both on C3 (130.8 Hz): E4 moves down 16 semitones while it overlaps A3.
-        // Measured: before the overlap a clean C3; during the overlap nothing left at E4's own pitches.
+        // Test K: overlapping notes. A3 (220 Hz) sustains 0-1.5 s; E4 (329.6 Hz) joins at 0.75 s. Key C puts both on
+        // their nearest C, C4 (261.6 Hz): A3 moves up 3 semitones, E4 down 4 while it overlaps A3.
+        // Measured: before the overlap a clean C4; during the overlap nothing left at E4's own pitches.
         {
             auto src = makeTone (1.6, [&] (float t)
             {
@@ -2311,8 +2311,8 @@ int main (int argc, char** argv)
             // first half: a clean C4 by autocorrelation
             juce::AudioBuffer<float> head (2, (int) (sr * 0.7)); head.clear(); head.copyFrom (0, 0, out, 0, 0, head.getNumSamples());
             juce::AudioBuffer<float> padded (2, (int) (sr * 1.0)); padded.clear(); padded.copyFrom (0, (int) (sr * 0.3), head, 0, 0, head.getNumSamples());
-            const float headErr = cents (pitchTrack (padded, 90.0f, 400.0f, exc), 130.81f);
-            // second half: E4's fundamental and 3rd harmonic (329.6, 988.9 Hz) gone; C4 (the target's 2nd harmonic) there.
+            const float headErr = cents (pitchTrack (padded, 150.0f, 500.0f, exc), 261.63f);
+            // second half: E4's fundamental and 3rd harmonic (329.6, 988.9 Hz) gone; C4 (the target) there.
             // (E4's 2nd harmonic, 659.3 Hz, sits next to the target's 5th, 654.1 Hz.)
             auto peakAt = [&] (float hz)
             {
@@ -2331,18 +2331,18 @@ int main (int argc, char** argv)
             const bool ok = std::abs (headErr) < 2.0f && atC4 > -30.0f && atB5 < atC4 - 25.0f && atE4 < -45.0f && d->numNoteEvents >= 2 && d->numNoteEvents <= 4
                             && std::abs (d->firstNoteMidi - 57.0f) < 0.5f;
             if (! ok) ++failures;
-            std::cout << (ok ? "ok   " : "FAIL ") << "Tuning K, overlapping notes (" << d->numNoteEvents << " events): A3 alone -> C3 " << juce::String (headErr, 1)
+            std::cout << (ok ? "ok   " : "FAIL ") << "Tuning K, overlapping notes (" << d->numNoteEvents << " events): A3 alone -> C4 " << juce::String (headErr, 1)
                       << " c; with E4 joining: level at C4 " << juce::String (atC4, 1) << " dB, left at B5 (E4's 3rd harmonic) " << juce::String (atB5, 1) << " dB, at E4 " << juce::String (atE4, 1) << " dB\n";
         }
 
-        // Test L: the octave comes from the first note's name (its nearest semitone). B2 +40 c is a B2 -> C2; C3 -40 c is
-        // a C3 -> C3; F#3 (halfway between two Cs) stays in its own octave -> C3; a vibrato of +-30 c around F#3 +10 c
-        // -> C3 with the vibrato kept and no flipping.
+        // Test L: octave boundaries. Each note goes to its nearest C: B2 +40 c -> C3 (60 c away, C2 is 1140); C3 -40 c
+        // -> C3; F#3 (exactly halfway between two Cs) goes up -> C4; a vibrato of +-30 c around F#3 +10 c -> C4 with the
+        // vibrato kept and no flipping between the octaves.
         {
             bool ok = true;
             juce::String rep;
             struct Case { const char* name; float midi; float expected; };
-            for (auto c : { Case { "B2 +40 c", 47.4f, 65.41f }, Case { "C3 -40 c", 47.6f, 130.81f }, Case { "F#3", 54.0f, 130.81f } })
+            for (auto c : { Case { "B2 +40 c", 47.4f, 130.81f }, Case { "C3 -40 c", 47.6f, 130.81f }, Case { "F#3", 54.0f, 261.63f } })
             {
                 const float hz = hzOf (c.midi);
                 auto d = ResynthData::fromAudio (makeTone (2.0, [&] (float t) { return harmonicNote (hz, t); }), sr, "boundary");
@@ -2361,24 +2361,24 @@ int main (int argc, char** argv)
                     return v;
                 }), sr, "boundary vibrato");
                 float exc = 0.0f;
-                const float f = pitchTrack (renderTuned (d, 60, 100.0f, 2.0), 90.0f, 200.0f, exc);
-                ok &= std::abs (cents (f, 130.81f)) < 3.0f && exc > 40.0f && exc < 75.0f && d->numNoteEvents == 1;
+                const float f = pitchTrack (renderTuned (d, 60, 100.0f, 2.0), 150.0f, 500.0f, exc);
+                ok &= std::abs (cents (f, 261.63f)) < 3.0f && exc > 40.0f && exc < 75.0f && d->numNoteEvents == 1;
                 rep << "F#3 vibrato -> " << juce::String (f, 1) << " Hz, excursion " << juce::String (exc, 0) << " c, " << d->numNoteEvents << " event";
             }
             if (! ok) ++failures;
-            std::cout << (ok ? "ok   " : "FAIL ") << "Tuning L, octave from the first note's name: " << rep << "\n";
+            std::cout << (ok ? "ok   " : "FAIL ") << "Tuning L, octave boundaries (nearest C, halfway goes up): " << rep << "\n";
         }
 
-        // Test M: sources whose first notes are D2, G4 and A3, each followed by a note in another octave and a two-note
-        // chord. Tune 100%: every segment lands on the key's pitch class in the first note's octave for keys C4..B4 (D2
-        // with C4 -> C2; G4 with D4 -> D4; A3 with F4 -> F3), and that many octaves away for keys in other octaves (C5
-        // -> C3; D3 -> D3; F6 -> F5). Tune 0% at middle C: unchanged; at D4: the original transposed up 2 semitones.
+        // Test M: sources whose notes are D2 then A3, G4 then C3, and A3 then E5 (plus a two-note chord at the end).
+        // Tune 100%: each note lands on the nearest note of the key's pitch class in its own register (D2 with C4 ->
+        // C2 and A3 -> C4; G4 with D4 -> D4 and C3 -> D3; A3 with F4 -> F3 and E5 -> F5), and that many octaves away
+        // for the same key in another octave (C5, D3, F6). Tune 0% at middle C: unchanged; at D4: up 2 semitones.
         {
-            // keyA is in middle C's octave and plays `target`; keyB is the same pitch class in another octave
-            struct Src { const char* name; float first, second, chordLo, chordHi; int keyA, keyB; float firstMidi, target; };
-            const Src srcs[] { { "D2", hzOf (38), hzOf (57), hzOf (40), hzOf (48), 60, 72, 38.0f, 65.41f },
-                               { "G4", hzOf (67), hzOf (48), hzOf (65), hzOf (71), 62, 50, 67.0f, 293.66f },
-                               { "A3", hzOf (57), hzOf (76), hzOf (36), hzOf (55), 65, 89, 57.0f, 174.61f } };
+            // keyA is in middle C's octave; keyB is the same pitch class in another octave
+            struct Src { const char* name; float first, second, chordLo, chordHi; int keyA, keyB; float firstMidi; float targetA[2]; };
+            const Src srcs[] { { "D2", hzOf (38), hzOf (57), hzOf (40), hzOf (48), 60, 72, 38.0f, { hzOf (36), hzOf (60) } },
+                               { "G4", hzOf (67), hzOf (48), hzOf (65), hzOf (71), 62, 50, 67.0f, { hzOf (62), hzOf (50) } },
+                               { "A3", hzOf (57), hzOf (76), hzOf (36), hzOf (55), 65, 77, 57.0f, { hzOf (53), hzOf (77) } } };
             const double segSec = 0.5;
             bool ok = true;
             juce::String rep;
@@ -2394,28 +2394,27 @@ int main (int argc, char** argv)
                     return env * (harmonicNote (sc.chordLo, local, 0.2f) + harmonicNote (sc.chordHi, local, 0.2f));
                 });
                 auto d = ResynthData::fromAudio (src, sr, sc.name);
-                const bool firstOk = std::abs (d->firstNoteMidi - sc.firstMidi) < 0.5f;
-                ok &= firstOk;
+                ok &= std::abs (d->firstNoteMidi - sc.firstMidi) < 0.5f;
                 rep << sc.name << " (first note MIDI " << juce::String (d->firstNoteMidi, 2) << "): ";
-                const float targets[2] { sc.target, sc.target * std::exp2 ((float) (sc.keyB - sc.keyA) / 12.0f) };
-                ok &= std::abs (cents (collapsed (sc.first, sc.keyA), targets[0])) < 0.1f && std::abs (cents (collapsed (sc.first, sc.keyB), targets[1])) < 0.1f;
-                float seen[2][3] {};
+                const float octaves = (float) (sc.keyB - sc.keyA) / 12.0f;
+                float seen[2][2] {};
                 for (int k = 0; k < 2; ++k)
                 {
-                    auto out = renderTuned (d, k == 0 ? sc.keyA : sc.keyB, 100.0f, 3 * segSec);
-                    for (int seg = 0; seg < 3; ++seg)
+                    const int key = k == 0 ? sc.keyA : sc.keyB;
+                    auto out = renderTuned (d, key, 100.0f, 3 * segSec);
+                    for (int seg = 0; seg < 2; ++seg)   // the single-note segments (chords are measured in test J)
                     {
-                        seen[k][seg] = segmentPitch (out, seg, segSec, targets[k] * 0.7f, targets[k] * 1.4f);
-                        ok &= std::abs (cents (seen[k][seg], targets[k])) < 2.0f;
+                        const float target = sc.targetA[seg] * std::exp2 (k == 0 ? 0.0f : octaves);
+                        ok &= std::abs (cents (nearest (seg == 0 ? sc.first : sc.second, key), target)) < 0.1f;
+                        seen[k][seg] = segmentPitch (out, seg, segSec, target * 0.7f, target * 1.4f);
+                        ok &= std::abs (cents (seen[k][seg], target)) < 2.0f;
+                        rep << "key " << key << ": " << juce::String (seg == 0 ? sc.first : sc.second, 0) << " -> " << juce::String (target, 1) << " Hz "
+                            << juce::String (cents (seen[k][seg], target), 1) << " c; ";
                     }
                 }
-                rep << "key " << sc.keyA << " -> " << juce::String (targets[0], 1) << " Hz, key " << sc.keyB << " -> " << juce::String (targets[1], 1) << " Hz:";
                 float keyDiff = 0.0f;   // the two keys exactly the octaves apart they should be
-                for (int seg = 0; seg < 3; ++seg)
-                {
-                    rep << " " << juce::String (cents (seen[0][seg], targets[0]), 1) << "/" << juce::String (cents (seen[1][seg], targets[1]), 1) << " c";
-                    keyDiff = std::max (keyDiff, std::abs (cents (seen[1][seg], seen[0][seg]) - 100.0f * (float) (sc.keyB - sc.keyA)));
-                }
+                for (int seg = 0; seg < 2; ++seg)
+                    keyDiff = std::max (keyDiff, std::abs (cents (seen[1][seg], seen[0][seg]) - 1200.0f * octaves));
                 ok &= keyDiff < 1.0f;
                 // Tune 0%: middle C plays the original, D4 two semitones up (single-note segments)
                 auto plain = renderTuned (d, 60, 0.0f, 3 * segSec), up = renderTuned (d, 62, 0.0f, 3 * segSec);
@@ -2427,11 +2426,11 @@ int main (int argc, char** argv)
                     upErr = std::max (upErr, std::abs (cents (segmentPitch (up, seg, segSec, hzUp * 0.7f, hzUp * 1.4f), hzUp)));
                 }
                 ok &= plainErr < 2.0f && upErr < 2.0f;
-                rep << "; octave step off by " << juce::String (keyDiff, 2) << " c; Tune 0%: unchanged within " << juce::String (plainErr, 1)
+                rep << "octave step off by " << juce::String (keyDiff, 2) << " c; Tune 0%: unchanged within " << juce::String (plainErr, 1)
                     << " c, key D4 +2 st within " << juce::String (upErr, 1) << " c; ";
             }
             if (! ok) ++failures;
-            std::cout << (ok ? "ok   " : "FAIL ") << "Tuning M, every note to the key's pitch class in the first note's octave, moved by the key's octave: " << rep << "\n";
+            std::cout << (ok ? "ok   " : "FAIL ") << "Tuning M, every note to the nearest note of the key's pitch class, moved by the key's octave: " << rep << "\n";
         }
 
         // Test H: Tune swept from 0 to 100% during a note: no clicks, finite output; pitch ends on target.
@@ -2464,7 +2463,7 @@ int main (int argc, char** argv)
             juce::AudioBuffer<float> end (2, out.getNumSamples() - tail + (int) (sr * 0.3));
             end.clear();
             end.copyFrom (0, (int) (sr * 0.3), out, 0, tail, out.getNumSamples() - tail);
-            const float endErr = cents (pitchTrack (end, 90.0f, 400.0f, exc), 130.81f);   // 233 Hz (A#3) -> C3
+            const float endErr = cents (pitchTrack (end, 150.0f, 500.0f, exc), 261.63f);   // 233 Hz (A#3) -> C4
             const bool ok = finite && rep.clicks == 0 && std::abs (endErr) < 2.0f;
             if (! ok) ++failures;
             std::cout << (ok ? "ok   " : "FAIL ") << "Tuning H, Tune swept 0 -> 100% mid-note: clicks " << rep.clicks << ", worst second difference " << juce::String (rep.worst, 4)

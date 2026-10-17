@@ -431,11 +431,10 @@ void PartialBank::setBlock (const ResynthData& d, const BlockParams& p, const Ga
     const size_t rowA = (size_t) fa * (size_t) d.numSlots, rowB = (size_t) fb * (size_t) d.numSlots;
 
     // The key: at Tune 0 it transposes the source (middle C = original pitch); at Tune 1 every note of the source moves
-    // to the key's pitch class in the octave of the source's first note, shifted by the key's octave from middle C.
+    // to the nearest note of the key's pitch class in its own register, shifted by the key's octave from middle C.
     const float keyMidi = 69.0f + 12.0f * std::log2 (p.f0 / 440.0f);
     const float transposeCents = (1.0f - p.tune) * (keyMidi - 60.0f) * 100.0f;
-    const bool tuning = p.tune > 0.0f && ! d.noteMidi.empty() && d.firstNoteMidi > 0.0f;
-    const float target = ResynthData::tuneTarget (d.firstNoteMidi, keyMidi);
+    const bool tuning = p.tune > 0.0f && ! d.noteMidi.empty();
     const float corrK = 1.0f - std::exp (-(float) n / (0.01f * (float) sr));   // correction glide, 10 ms time constant
     const float invMax = 1.0f / d.maxAmp;
 
@@ -471,7 +470,7 @@ void PartialBank::setBlock (const ResynthData& d, const BlockParams& p, const Ga
             if (tuning)
             {
                 const float m = d.noteMidi[(aA > 0.0f ? rowA : rowB) + (size_t) s];
-                if (m > 0.0f) corr = 100.0f * (target - m);
+                if (m > 0.0f) corr = 100.0f * (ResynthData::tuneTarget (m, keyMidi) - m);
             }
             if (! sl.corrValid) { sl.corr = corr; sl.corrValid = true; }
             else sl.corr += (corr - sl.corr) * corrK;
@@ -507,10 +506,10 @@ void PartialBank::setBlock (const ResynthData& d, const BlockParams& p, const Ga
 
     float panL, panR;
     Unison::panGains (p.pan, panL, panR);
-    setNoiseBlock (d, p, gain, u1, transposeCents, tuning ? target : -1.0f, panL, panR, n);
+    setNoiseBlock (d, p, gain, u1, transposeCents, keyMidi, tuning, panL, panR, n);
 }
 
-void PartialBank::setNoiseBlock (const ResynthData& d, const BlockParams& p, const GainFn& gain, double timeSec, float transposeCents, float targetMidi,
+void PartialBank::setNoiseBlock (const ResynthData& d, const BlockParams& p, const GainFn& gain, double timeSec, float transposeCents, float keyMidi, bool tuning,
                                  float panL, float panR, int n)
 {
     if (! d.hasNoise() || p.fft == nullptr || noiseBufL.empty())
@@ -543,7 +542,7 @@ void PartialBank::setNoiseBlock (const ResynthData& d, const BlockParams& p, con
     }
     // Tune: each band moves with the correction of its nearest note (power split between the two bands it lands on)
     const float* notes = d.frameNotes.empty() ? nullptr : &d.frameNotes[(size_t) fa * (size_t) ResynthData::maxNotesPerFrame];
-    if (targetMidi >= 0.0f && notes != nullptr && notes[0] > 0.0f)
+    if (tuning && notes != nullptr && notes[0] > 0.0f)
     {
         float pL[numBands + 1] {}, pR[numBands + 1] {}, pC[numBands + 1] {};
         for (int b = 0; b < numBands; ++b)
@@ -552,7 +551,7 @@ void PartialBank::setNoiseBlock (const ResynthData& d, const BlockParams& p, con
             float best = 1.0e9f, m = 0.0f;
             for (int i = 0; i < ResynthData::maxNotesPerFrame && notes[i] > 0.0f; ++i)
                 if (std::abs (notes[i] - midiB) < best) { best = std::abs (notes[i] - midiB); m = notes[i]; }
-            const float corr = p.tune * 100.0f * (targetMidi - m);   // cents
+            const float corr = p.tune * 100.0f * (ResynthData::tuneTarget (m, keyMidi) - m);   // cents
             const float pos = (float) b + corr / (1200.0f / ResynthData::noiseBandsPerOctave);
             const int i0 = (int) std::floor (pos);
             const float t = pos - (float) i0;

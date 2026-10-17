@@ -9,9 +9,9 @@
 // interval frequencies, which were derived from the measured phases), so integrating it keeps every partial in
 // phase with the source. Phases are only ever set when a partial (re)starts from silence, from the measured phase;
 // levels ramp linearly across the block. Pitch, Tune, Stretch, Prism, Shimmer and FM act on the mean frequency.
-// Tune moves each note of the source (ResynthData::noteMidi) to one target note (ResynthData::tuneTarget): a
-// partial's correction glides over ~20 ms when its note changes, so reassignments never step the pitch; the residual
-// bands follow their nearest note.
+// Tune moves each note of the source (ResynthData::noteMidi) to the nearest note of the key's pitch class
+// (ResynthData::tuneTarget): a partial's correction glides over ~10 ms when its note changes, so reassignments never
+// step the pitch; the residual bands follow their nearest note.
 //
 // Residual: the noise spectrogram is played by overlap-adding Hann-windowed frames of random-phase noise shaped
 // to the source's band levels (shifted with the played note), with the measured left/right coherence.
@@ -39,7 +39,7 @@ public:
         double blockSec = 0.0;   // source time the block covers (levels are aimed at its end)
         float f0 = 261.63f;      // played pitch; equals ResynthData::rootHz at middle C
         float tune = 0.0f;       // 0 = the key transposes the source (middle C = original); 1 = every note of the source
-                                 // moved to the key's pitch class in the octave of the source's first note, plus the
+                                 // moved to the nearest note of the key's pitch class, in its own register, plus the
                                  // key's octave from middle C (see ResynthData::tuneTarget)
         float lift = 0.0f;       // raises quiet partials
         float stretch = 0.0f;
@@ -189,8 +189,8 @@ private:
     void setSlot (int s, float f, float h, float a, float pan, const BlockParams& p, float nyquist, float startPhase = -1.0f,
                   float stereoPhase = 0.0f);
     static float mangle (float h, const BlockParams& p, int index);
-    // transposeCents = shift from the key (already scaled by 1 - Tune); targetMidi = Tune's target note (< 0 = no tuning)
-    void setNoiseBlock (const ResynthData& d, const BlockParams& p, const GainFn& gain, double timeSec, float transposeCents, float targetMidi,
+    // transposeCents = shift from the key (already scaled by 1 - Tune); keyMidi = the played key for Tune's targets (tuning = false: none)
+    void setNoiseBlock (const ResynthData& d, const BlockParams& p, const GainFn& gain, double timeSec, float transposeCents, float keyMidi, bool tuning,
                         float panL, float panR, int n);
     // adds one Hann-windowed noise frame starting `offset` samples from the read position (offset <= 0)
     void generateNoiseFrame (int offset);

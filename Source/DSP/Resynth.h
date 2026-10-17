@@ -43,7 +43,7 @@ struct ResynthData
     // frame in time with notes; 0 = no note anywhere near.
     static constexpr int maxNotesPerFrame = 6;
     // Centre pitch (MIDI) of the source's first note: the earliest note event (the lowest, if several start together);
-    // 0 = no notes found.
+    // 0 = no notes found. Shown in the analysis report; Tune itself works note by note.
     float firstNoteMidi = 0.0f;
     std::vector<float> noteMidi;     // numFrames * numSlots
     std::vector<float> frameNotes;   // numFrames * maxNotesPerFrame: the notes sounding in the frame (0 = empty)
@@ -52,10 +52,19 @@ struct ResynthData
     // and the share of the note evidence within half a semitone of it (0..1).
     float detectedFundamentalHz = 0.0f;
     float pitchConfidence = 0.0f;
-    // Where Tune 100% moves every note of the source when key keyMidi (fractional allowed) is played: the key's pitch
-    // class in the octave of the source's first note (its nearest semitone's octave) for keys C4..B4, an octave up or
-    // down for each octave the key is above or below that.
-    static float tuneTarget (float firstNote, float keyMidi) { return 12.0f * std::floor (std::round (firstNote) / 12.0f) + keyMidi - 60.0f; }
+    // Where Tune 100% moves a note of the source with centre pitch noteMidi when key keyMidi (fractional allowed) is
+    // played: the nearest note of the key's pitch class, so every note keeps its own register; keys C4..B4 keep the
+    // register, every octave the key is above or below that moves the result an octave. A note halfway between two
+    // (within 3 cents of it, so the events of one such note all agree) goes up.
+    static float tuneTarget (float noteMidi, float keyMidi)
+    {
+        const float keyOctave = 12.0f * std::floor ((keyMidi - 60.0f) / 12.0f);   // 0 for C4..B4
+        const float pitchClass = keyMidi - keyOctave;                              // 60 <= pitchClass < 72
+        float x = (noteMidi - pitchClass) / 12.0f;                                 // octaves from the pitch class
+        const float frac = x - std::floor (x);
+        if (std::abs (frac - 0.5f) < 0.0025f) x = std::floor (x) + 0.5f;
+        return pitchClass + 12.0f * std::floor (x + 0.5f) + keyOctave;
+    }
 
     // Fills the note fields from the tracked partials and the mono signal.
     static void analysePitch (ResynthData& d, const float* mono, int len, double sampleRate);
