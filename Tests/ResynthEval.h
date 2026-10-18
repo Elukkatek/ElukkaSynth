@@ -693,6 +693,27 @@ inline juce::String noteName (float hz)
     return juce::String (names[((n % 12) + 12) % 12]) + juce::String (n / 12 - 1) + (cents >= 0 ? "+" : "") + juce::String (cents) + "c";
 }
 
+// How often a sounding partial's note tag changes from one frame to the next (per second of source). On a partial
+// whose own pitch stays put (`steady`) the change moves its Tune correction alone and is heard as a pitch wiggle;
+// with a pitch jump of over a semitone it is a new note on a continuing track, which the correction steps with.
+inline float tagFlipsPerSec (const ResynthData& d, float* steady = nullptr)
+{
+    const int S = d.numSlots;
+    int flips = 0, steadyFlips = 0;
+    for (int f = 1; f < d.numFrames; ++f)
+        for (int s = 0; s < S; ++s)
+        {
+            const size_t i = (size_t) f * (size_t) S + (size_t) s;
+            if (d.amp[i] > 0.0f && d.amp[i - (size_t) S] > 0.0f && std::abs (d.noteMidi[i] - d.noteMidi[i - (size_t) S]) > 0.01f)
+            {
+                ++flips;
+                if (std::abs (d.freq[i] - d.freq[i - (size_t) S]) <= 0.0595f * d.freq[i - (size_t) S]) ++steadyFlips;
+            }
+        }
+    if (steady != nullptr) *steady = d.durationSec > 0.0 ? (float) (steadyFlips / d.durationSec) : 0.0f;
+    return d.durationSec > 0.0 ? (float) (flips / d.durationSec) : 0.0f;
+}
+
 inline int runPitchFolder (const juce::File& dir)
 {
     auto files = dir.findChildFiles (juce::File::findFiles, false, "*.wav;*.mp3;*.aif;*.aiff;*.flac");
@@ -702,10 +723,12 @@ inline int runPitchFolder (const juce::File& dir)
         auto src = loadFile (f, 20.0);
         if (src.getNumSamples() < 4096) continue;
         auto d = ResynthData::fromAudio (src, 44100.0, f.getFileNameWithoutExtension());
+        float steady = 0.0f;
         std::cout << f.getFileNameWithoutExtension().substring (0, 44).paddedRight (' ', 45)
                   << " pitch " << juce::String (d->detectedFundamentalHz, 1).paddedLeft (' ', 7) << " Hz (" << noteName (d->detectedFundamentalHz).paddedRight (' ', 8)
                   << ")  share " << juce::String (d->pitchConfidence, 2) << "  note events " << d->numNoteEvents
-                  << "  first note " << (d->firstNoteMidi > 0.0f ? noteName (440.0f * std::exp2 ((d->firstNoteMidi - 69.0f) / 12.0f)) : juce::String ("-")) << "\n";
+                  << "  first note " << (d->firstNoteMidi > 0.0f ? noteName (440.0f * std::exp2 ((d->firstNoteMidi - 69.0f) / 12.0f)) : juce::String ("-")).paddedRight (' ', 8)
+                  << "  tag flips/s " << juce::String (tagFlipsPerSec (*d, &steady), 1) << " (steady partial " << juce::String (steady, 1) << ")\n";
     }
     return 0;
 }

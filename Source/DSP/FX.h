@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "../Params.h"
 #include "Reverb.h"
+#include "Filter.h"
 
 struct FXParams
 {
@@ -14,6 +15,7 @@ struct FXParams
     bool ottOn = false; float ottAmount = 0.5f, ottSpeed = 0.5f;   // 0..1
     bool dlyOn = false; float dlyBeats = 0.75f, dlyFb = 0.4f, dlyMix = 0.25f; bool dlyPingPong = true;
     bool revOn = false; VintageReverb::Params rev;
+    bool fltOn = false; int fltType = 0, fltSlope = 0; float fltCutoff = 20000.0f, fltRes = 0.0f, fltDrive = 0.0f;
 };
 
 // Low shelf, bell and high shelf of the EQ as raw biquad coefficients (no allocation, for the audio thread).
@@ -169,6 +171,8 @@ public:
         for (auto* f : { &combLp, &combHp, &dlyLp, &dlyHp }) f->reset();
         ott.prepare (sr, juce::jmax (maxBlock, 512));
         combWasOn = false;
+        fxFilter.reset();
+        fltWasOn = false;
     }
 
     void process (float* L, float* R, int n, const FXParams& p, double bpm, const Order& order)
@@ -197,6 +201,14 @@ public:
                     revWasOn = p.revOn;
                     break;
                 case P::FxEq:     if (p.eqOn) equalise (L, R, n, p); break;
+                case P::FxFilter:
+                    if (p.fltOn)
+                    {
+                        if (! fltWasOn) { fxFilter.reset(); fltCutoff = -1.0f; }   // switching on starts from a clean state
+                        filterFx (L, R, n, p);
+                    }
+                    fltWasOn = p.fltOn;
+                    break;
                 default: break;
             }
     }
@@ -218,6 +230,21 @@ private:
             case 3: return std::sin (x * juce::MathConstants<float>::halfPi);
             default: return std::tanh (x);
         }
+    }
+
+    // The voice filter on the summed signal; the cutoff glides (exponentially) across the block so changes never step
+    void filterFx (float* L, float* R, int n, const FXParams& p)
+    {
+        fxFilter.setup (sr, p.fltType, p.fltSlope, p.fltRes, p.fltDrive);
+        const float target = juce::jlimit (20.0f, 20000.0f, p.fltCutoff);
+        if (fltCutoff < 0.0f) fltCutoff = target;
+        const float step = std::pow (target / fltCutoff, 1.0f / (float) juce::jmax (1, n));
+        for (int i = 0; i < n; ++i)
+        {
+            fltCutoff *= step;
+            fxFilter.process (L[i], R[i], fltCutoff);
+        }
+        fltCutoff = target;
     }
 
     void distortion (float* L, float* R, int n, const FXParams& p)
@@ -342,6 +369,9 @@ private:
     WetFilter combLp, combHp, dlyLp, dlyHp;
     bool revWasOn = false;
     bool combWasOn = false;
+    VoiceFilter fxFilter;
+    float fltCutoff = -1.0f;   // gliding cutoff (Hz); < 0 = jump to the target
+    bool fltWasOn = false;
     float combDelay = -1.0f;   // current (smoothed) comb delay in samples
 
 public:

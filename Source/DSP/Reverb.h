@@ -255,8 +255,8 @@ private:
             gain[i] = juce::jmin (0.9995f, std::pow (10.0f, -3.0f * loopSamples / (sDecay * (float) sr)) / dampAtRef);
         }
         // the wet level grows with the decay; keep long settings from getting much louder than short ones. Overall level
-        // matched to the previous reverb (so existing presets keep their dry/wet balance)
-        wetGain = 8.6f / std::sqrt (1.0f + 0.15f * sDecay);
+        // 6 dB below the previous reverb's (it was too loud against the dry signal)
+        wetGain = 4.3f / std::sqrt (1.0f + 0.15f * sDecay);
         primed = true;
     }
 

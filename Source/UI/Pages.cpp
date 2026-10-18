@@ -1143,11 +1143,11 @@ void ResynthPage::resized()
 //==============================================================================
 SeqPage::SeqPage (ElukkaAudioProcessor& p)
     : proc (p),
-      on (p.apvts, "sq_on", "Sequencer On"), rate (p.apvts, "sq_rate", "Rate"),
+      on (p.apvts, "sq_on", "Sequencer On"), retrig (p.apvts, "sq_retrig", "Retrigger"), rate (p.apvts, "sq_rate", "Rate"),
       gate (p.apvts, "sq_gate", "Gate"), slide (p.apvts, "sq_slide", "Slide Time"), accent (p.apvts, "sq_accent", "Accent"),
       grid (p)
 {
-    for (auto* c : std::initializer_list<juce::Component*> { &controls, &on, &rate, &gate, &slide, &accent, &patternBox, &prevPattern, &nextPattern, &savePattern,
+    for (auto* c : std::initializer_list<juce::Component*> { &controls, &on, &retrig, &rate, &gate, &slide, &accent, &patternBox, &prevPattern, &nextPattern, &savePattern,
                                                               &length, &pitchCount, &startStep, &lengthLabel, &pitchLabel, &startLabel, &grid,
                                                               &randomize, &randomScale, &randomRange })
         addAndMakeVisible (c);
@@ -1158,6 +1158,7 @@ SeqPage::SeqPage (ElukkaAudioProcessor& p)
     randomRange.setSelectedId (1, juce::dontSendNotification);
     randomRange.setTooltip ("How far up and down the random pitches may go");
     randomize.setTooltip ("New random pitch for every step (time, accents and slides stay)");
+    retrig.button.setTooltip ("Every new note restarts the pattern from its start step. Off: the pattern follows the song position");
     randomize.onClick = [this] { randomizePitch(); };
 
     for (auto* s : { &length, &pitchCount, &startStep })
@@ -1289,7 +1290,11 @@ void SeqPage::resized()
     controls.setBounds (top);
     auto c = controls.contentInParent();
     auto row = c.removeFromTop (84);
-    on.setBounds (row.removeFromLeft (120).withSizeKeepingCentre (120, 26));
+    {
+        auto onCol = row.removeFromLeft (120);
+        on.setBounds (onCol.removeFromTop (onCol.getHeight() / 2).withSizeKeepingCentre (120, 26));
+        retrig.setBounds (onCol.withSizeKeepingCentre (120, 26));
+    }
     row.removeFromLeft (8);
     rate.setBounds (row.removeFromLeft (80).withSizeKeepingCentre (80, 40));
     row.removeFromLeft (8);
@@ -1521,6 +1526,30 @@ FxPage::FxPage (ElukkaAudioProcessor& p) : proc (p)
             speed->setBounds (row);
             c.removeFromTop (10);
             meter->setBounds (c.removeFromTop (120));
+        };
+    }
+    {
+        auto& b = *(boxes[P::FxFilter] = std::make_unique<FxBox> ("FILTER", P::FxFilter));
+        auto* on = &b.add<Toggle> (s, "fxf_on", "On");
+        auto* type = &b.add<Choice> (s, "fxf_type", "Type");
+        auto* slope = &b.add<Choice> (s, "fxf_slope", "Slope");
+        std::vector<juce::Component*> knobs { &b.add<Knob> (s, "fxf_cutoff", "Cutoff"), &b.add<Knob> (s, "fxf_res", "Resonance"),
+                                              &b.add<Knob> (s, "fxf_drive", "Drive") };
+        b.layout = [on, type, slope, knobs] (juce::Rectangle<int> c)
+        {
+            on->setBounds (c.removeFromTop (26).removeFromLeft (70));
+            c.removeFromTop (8);
+            type->setBounds (c.removeFromTop (40));
+            c.removeFromTop (6);
+            slope->setBounds (c.removeFromTop (40));
+            c.removeFromTop (10);
+            const int kw = c.getWidth() / 2;
+            juce::Rectangle<int> row;
+            for (size_t i = 0; i < knobs.size(); ++i)
+            {
+                if (i % 2 == 0) { row = c.removeFromTop (70); c.removeFromTop (8); }
+                knobs[i]->setBounds (row.removeFromLeft (kw));
+            }
         };
     }
     {

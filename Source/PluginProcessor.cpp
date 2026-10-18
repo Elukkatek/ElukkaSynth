@@ -50,7 +50,9 @@ void ElukkaAudioProcessor::cacheParams()
     hmTableSrc = raw ("hm_tableSrc"); hmTableAmt = raw ("hm_tableAmt");
     rsTune = raw ("rs_tune"); rsGate = raw ("rs_gate"); rsLift = raw ("rs_lift"); rsSpeed = raw ("rs_speed"); rsSync = raw ("rs_sync"); rsBpm = raw ("rs_bpm");
     rsPos = raw ("rs_pos"); rsLoop = raw ("rs_loop");
-    sqOn = raw ("sq_on"); sqRate = raw ("sq_rate"); sqGate = raw ("sq_gate"); sqSlide = raw ("sq_slide"); sqAccent = raw ("sq_accent");
+    fxfOn = raw ("fxf_on"); fxfType = raw ("fxf_type"); fxfSlope = raw ("fxf_slope");
+    fxfCutoff = raw ("fxf_cutoff"); fxfRes = raw ("fxf_res"); fxfDrive = raw ("fxf_drive");
+    sqOn = raw ("sq_on"); sqRetrig = raw ("sq_retrig"); sqRate = raw ("sq_rate"); sqGate = raw ("sq_gate"); sqSlide = raw ("sq_slide"); sqAccent = raw ("sq_accent");
     distOn = raw ("dist_on"); distType = raw ("dist_type"); distDrive = raw ("dist_drive"); distMix = raw ("dist_mix");
     combOn = raw ("comb_on"); combFreq = raw ("comb_freq"); combFb = raw ("comb_fb"); combMix = raw ("comb_mix");
     eqOn = raw ("eq_on"); eqLow = raw ("eq_low"); eqMidF = raw ("eq_midF"); eqMid = raw ("eq_mid"); eqHigh = raw ("eq_high");
@@ -188,6 +190,8 @@ void ElukkaAudioProcessor::buildContext (double bpm)
     f.revOn = on (revOn);
     f.rev.size = revSize->load(); f.rev.decay = revDecay->load(); f.rev.tone = revTone->load() * 0.01f;
     f.rev.mod = revMod->load() * 0.01f; f.rev.mode = idx (revMode); f.rev.mix = revMix->load();
+    f.fltOn = on (fxfOn); f.fltType = idx (fxfType); f.fltSlope = idx (fxfSlope);
+    f.fltCutoff = fxfCutoff->load(); f.fltRes = fxfRes->load(); f.fltDrive = fxfDrive->load();
 }
 
 int ElukkaAudioProcessor::findVoice()
@@ -267,7 +271,11 @@ void ElukkaAudioProcessor::handleMidi (const juce::MidiMessage& m)
     {
         heldNotes.erase (std::remove (heldNotes.begin(), heldNotes.end(), m.getNoteNumber()), heldNotes.end());
         heldNotes.push_back (m.getNoteNumber());
-        if (seqOn) return;
+        if (seqOn)
+        {
+            if (on (sqRetrig)) seq.retrigger();
+            return;
+        }
         const bool legato = mode == 2 && heldNotes.size() > 1;
         voiceOn (m.getNoteNumber(), m.getFloatVelocity(), legato, pGlide->load(), false);
     }
@@ -385,6 +393,9 @@ void ElukkaAudioProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
     f.dlyMix = applyMod (destRanges[P::DstDlyMix], f.dlyMix, off[P::DstDlyMix]);
     f.rev.size = applyMod (destRanges[P::DstRevSize], f.rev.size, off[P::DstRevSize]);
     f.rev.mix = applyMod (destRanges[P::DstRevMix], f.rev.mix, off[P::DstRevMix]);
+    f.fltCutoff = applyMod (destRanges[P::DstFxfCutoff], f.fltCutoff, off[P::DstFxfCutoff]);
+    f.fltRes = applyMod (destRanges[P::DstFxfRes], f.fltRes, off[P::DstFxfRes]);
+    f.fltDrive = applyMod (destRanges[P::DstFxfDrive], f.fltDrive, off[P::DstFxfDrive]);
     FXChain::Order order;
     for (int i = 0; i < P::NumFx; ++i) order[(size_t) i] = fxOrder[(size_t) i].load();
     fx.process (L, R, num, f, bpm, order);

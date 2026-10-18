@@ -868,6 +868,7 @@ void ResynthData::analysePitch (ResynthData& d, const float* mono, int len, doub
             if (next >= 0 && next - f <= maxDist && (ref[(size_t) f] < 0 || next - f <= lookAhead || next - f < f - ref[(size_t) f])) ref[(size_t) f] = next;
         }
     }
+    std::vector<uint8_t> claimed ((size_t) F * (size_t) S, 0);   // the partial was on the series of a note found in that frame
     for (int f = 0; f < F; ++f)
     {
         const int rf = ref[(size_t) f];
@@ -880,7 +881,7 @@ void ResynthData::analysePitch (ResynthData& d, const float* mono, int len, doub
         {
             if (d.amp[row + (size_t) s] <= 0.0f) continue;
             const int own = rf == f ? owner[row + (size_t) s] : -1;
-            if (own >= 0) { d.noteMidi[row + (size_t) s] = events[(size_t) fr[(size_t) own].event].centre; continue; }
+            if (own >= 0) { d.noteMidi[row + (size_t) s] = events[(size_t) fr[(size_t) own].event].centre; claimed[row + (size_t) s] = 1; continue; }
             // unclaimed: the nearest note in frequency
             float bestDist = 1.0e9f, best = 0.0f;
             for (auto& n : fr)
@@ -889,6 +890,41 @@ void ResynthData::analysePitch (ResynthData& d, const float* mono, int len, doub
                 if (dist < bestDist) { bestDist = dist; best = events[(size_t) n.event].centre; }
             }
             d.noteMidi[row + (size_t) s] = best;
+        }
+    }
+    // A partial keeps its note for as long as it sounds; it only changes when another note claims it, and that claim
+    // holds for 50 ms. Otherwise the fading partials of a note that has ended would take the next note (their nearest
+    // one) and swoop by the difference of the two corrections, and a harmonic two notes share, or an unclaimed partial
+    // whose nearest note comes and goes, would flip from frame to frame: every change moves the partial's Tune
+    // correction and is heard as a pitch wiggle. Decided with look-ahead, so a new note still takes effect on its
+    // first frame.
+    {
+        const int hold = juce::jmax (2, (int) std::lround (0.05 * d.frameRate));
+        auto same = [] (float a, float b) { return std::abs (a - b) < 0.01f; };
+        for (int s = 0; s < S; ++s)
+        {
+            auto at = [&] (int f) { return (size_t) f * (size_t) S + (size_t) s; };
+            auto tag = [&] (int f) -> float& { return d.noteMidi[at (f)]; };
+            auto sounding = [&] (int f) { return d.amp[at (f)] > 0.0f; };
+            for (int f = 0; f < F;)
+            {
+                if (! sounding (f)) { ++f; continue; }
+                int end = f;
+                while (end < F && sounding (end)) ++end;
+                float cur = tag (f);
+                for (int i = f + 1; i < end;)
+                {
+                    if (same (tag (i), cur)) { ++i; continue; }
+                    int j = i;
+                    while (j < end && same (tag (j), tag (i))) ++j;
+                    bool claim = false;   // a note claimed the partial within the first 50 ms (a note's attack frames borrow tags, unclaimed)
+                    for (int k = i; k < juce::jmin (j, i + hold); ++k) claim |= claimed[at (k)] != 0;
+                    if (claim && j - i >= hold) cur = tag (i);
+                    else for (int k = i; k < j; ++k) tag (k) = cur;
+                    i = j;
+                }
+                f = end;
+            }
         }
     }
 

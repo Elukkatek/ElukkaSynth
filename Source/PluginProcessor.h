@@ -94,6 +94,8 @@ private:
     std::atomic<float> *sqOn {}, *sqRate {}, *sqGate {}, *sqSlide {}, *sqAccent {};
     std::atomic<float> *distOn {}, *distType {}, *distDrive {}, *distMix {}, *combOn {}, *combFreq {}, *combFb {}, *combMix {};
     std::atomic<float> *eqOn {}, *eqLow {}, *eqMidF {}, *eqMid {}, *eqHigh {}, *dlyOn {}, *dlyDiv {}, *dlyFb {}, *dlyMix {}, *dlyPp {};
+    std::atomic<float>* sqRetrig {};
+    std::atomic<float> *fxfOn {}, *fxfType {}, *fxfSlope {}, *fxfCutoff {}, *fxfRes {}, *fxfDrive {};
     std::atomic<float> *revOn {}, *revSize {}, *revDecay {}, *revTone {}, *revMod {}, *revMode {}, *revMix {}, *macro1 {}, *macro2 {};
     std::atomic<float> *eqLowF {}, *eqLowQ {}, *eqMidQ {}, *eqHighF {}, *eqHighQ {};
     std::atomic<float> *combLp {}, *combHp {}, *dlySync {}, *dlyTime {}, *dlyLp {}, *dlyHp {};

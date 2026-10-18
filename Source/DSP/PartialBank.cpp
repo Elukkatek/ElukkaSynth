@@ -435,7 +435,7 @@ void PartialBank::setBlock (const ResynthData& d, const BlockParams& p, const Ga
     const float keyMidi = 69.0f + 12.0f * std::log2 (p.f0 / 440.0f);
     const float transposeCents = (1.0f - p.tune) * (keyMidi - 60.0f) * 100.0f;
     const bool tuning = p.tune > 0.0f && ! d.noteMidi.empty();
-    const float corrK = 1.0f - std::exp (-(float) n / (0.01f * (float) sr));   // correction glide, 10 ms time constant
+    const float corrK = 1.0f - std::exp (-(float) n / (0.025f * (float) sr));   // correction glide, 25 ms time constant
     const float invMax = 1.0f / d.maxAmp;
 
     // Gate: thresholds (amplitude) relative to the loudest partial at this moment; between them a smooth 6 dB knee
@@ -472,8 +472,10 @@ void PartialBank::setBlock (const ResynthData& d, const BlockParams& p, const Ga
                 const float m = d.noteMidi[(aA > 0.0f ? rowA : rowB) + (size_t) s];
                 if (m > 0.0f) corr = 100.0f * (ResynthData::tuneTarget (m, keyMidi) - m);
             }
-            if (! sl.corrValid) { sl.corr = corr; sl.corrValid = true; }
+            // a (re)starting partial, or one whose own pitch just jumped by over a semitone, takes the correction at once
+            if (! sl.corrValid || std::abs (fSrc - sl.srcFreq) > 0.0595f * sl.srcFreq) { sl.corr = corr; sl.corrValid = true; }
             else sl.corr += (corr - sl.corr) * corrK;
+            sl.srcFreq = fSrc;
             f = fSrc * std::exp2 ((transposeCents + p.tune * sl.corr) / 1200.0f);
             if (p.stretch != 0.0f)
                 f *= std::pow (juce::jmax (0.01f, f / p.f0), p.stretch * 0.25f);

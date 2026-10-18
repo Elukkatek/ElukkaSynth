@@ -58,9 +58,9 @@ inline const juce::StringArray filterTypes  { "Low Pass", "High Pass", "Band Pas
 inline const juce::StringArray filterSlopes { "24 dB", "12 dB", "6 dB" };
 
 // FX chain: the order is user-editable (dragging the FX boxes); this is the default.
-enum Fx { FxComb, FxDist, FxDelay, FxReverb, FxEq, FxOtt, NumFx };
-inline const char* fxKeys[NumFx] { "comb", "dist", "delay", "reverb", "eq", "ott" };
-inline const int defaultFxOrder[NumFx] { FxComb, FxOtt, FxDist, FxDelay, FxReverb, FxEq };
+enum Fx { FxComb, FxDist, FxDelay, FxReverb, FxEq, FxOtt, FxFilter, NumFx };
+inline const char* fxKeys[NumFx] { "comb", "dist", "delay", "reverb", "eq", "ott", "filter" };
+inline const int defaultFxOrder[NumFx] { FxComb, FxOtt, FxDist, FxFilter, FxDelay, FxReverb, FxEq };
 
 // Source driving the per-harmonic "depth" table
 inline const juce::StringArray tableModSources { "Mod 1", "Mod 2", "Amp Env", "Macro 1", "Macro 2" };
@@ -93,6 +93,7 @@ enum Dst
     DstM1SyncRate, DstM2SyncRate, DstShRate,
     DstShimmer, DstShimmerRate,
     DstRsGate,
+    DstFxfCutoff, DstFxfRes, DstFxfDrive,
     NumDst
 };
 
@@ -138,6 +139,7 @@ inline const DestInfo dests[NumDst] =
     { "Mod 1 Sync Rate", "m1_syncRate", true }, { "Mod 2 Sync Rate", "m2_syncRate", true }, { "S&H Rate", "sh_syncRate", false },
     { "Shimmer Amount", "hm_shimmer", true }, { "Shimmer Rate", "hm_shimmerRate", true },
     { "Resynth Gate", "rs_gate", true },
+    { "FX Filter Cutoff", "fxf_cutoff", false }, { "FX Filter Resonance", "fxf_res", false }, { "FX Filter Drive", "fxf_drive", false },
 };
 
 // Matrix destination for a parameter ID, or DstNone if it cannot be modulated.
@@ -302,6 +304,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
 
     // Sequencer
     addB ("sq_on", "Sequencer On", false);
+    addB ("sq_retrig", "Sequencer Retrigger", false);   // on: every new note restarts the pattern from its start step
     addC ("sq_rate", "Sequencer Rate", seqRates, 1);
     addF ("sq_gate", "Sequencer Gate", { 0.05f, 1.0f }, 0.5f);
     addF ("sq_slide", "Slide Time", skewed (0.005f, 0.5f, 0.06f), 0.06f, "s");
@@ -342,6 +345,14 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     addF ("dly_fb", "Delay Feedback", { 0.0f, 0.95f }, 0.4f);
     addF ("dly_mix", "Delay Mix", { 0.0f, 1.0f }, 0.25f);
     addB ("dly_pp", "Delay Ping-Pong", true);
+
+    // FX filter: the voice filter's sound (same types and slopes) on the summed signal, placed in the FX chain
+    addB ("fxf_on", "FX Filter On", false);
+    addC ("fxf_type", "FX Filter Type", filterTypes, 0);
+    addC ("fxf_slope", "FX Filter Slope", filterSlopes, 0);
+    addF ("fxf_cutoff", "FX Filter Cutoff", skewed (20.0f, 20000.0f, 1000.0f), 20000.0f, "Hz");
+    addF ("fxf_res", "FX Filter Resonance", { 0.0f, 1.0f }, 0.0f);
+    addF ("fxf_drive", "FX Filter Drive", { 0.0f, 1.0f }, 0.0f);
 
     // OTT-style multiband (3 bands) upward + downward compressor
     addB ("ott_on", "OTT On", false);

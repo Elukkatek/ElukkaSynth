@@ -10,8 +10,10 @@
 // phase with the source. Phases are only ever set when a partial (re)starts from silence, from the measured phase;
 // levels ramp linearly across the block. Pitch, Tune, Stretch, Prism, Shimmer and FM act on the mean frequency.
 // Tune moves each note of the source (ResynthData::noteMidi) to the nearest note of the key's pitch class
-// (ResynthData::tuneTarget): a partial's correction glides over ~10 ms when its note changes, so reassignments never
-// step the pitch; the residual bands follow their nearest note.
+// (ResynthData::tuneTarget): when a partial's note changes while its own pitch stays put (a reassignment) the
+// correction glides with a 25 ms time constant, so it never wiggles; when its pitch jumps too (a new note on a
+// continuing track) the correction steps with it, landing the note on target at once. The residual bands follow
+// their nearest note.
 //
 // Residual: the noise spectrogram is played by overlap-adding Hann-windowed frames of random-phase noise shaped
 // to the source's band levels (shifted with the played note), with the measured left/right coherence.
@@ -216,6 +218,7 @@ private:
         float ampB = 0.0f, dAmpB = 0.0f, targetB = 0.0f;   // level in the Bass Mono voice
         float sph = 0.0f, dSph = 0.0f, targetSph = 0.0f;   // stereo phase: right minus left (cycles)
         float corr = 0.0f;                                  // Tune correction (cents at Tune 100 %), smoothed across blocks
+        float srcFreq = 0.0f;                               // the source frequency the correction was last set for
         bool corrValid = false;
         bool primed = false;
     };

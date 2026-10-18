@@ -1137,7 +1137,7 @@ int main (int argc, char** argv)
         }
 
         // FX order survives the plugin state
-        const int custom[] { P::FxReverb, P::FxEq, P::FxOtt, P::FxDist, P::FxComb, P::FxDelay };
+        const int custom[] { P::FxReverb, P::FxEq, P::FxFilter, P::FxOtt, P::FxDist, P::FxComb, P::FxDelay };
         for (int i = 0; i < P::NumFx; ++i) fp.fxOrder[(size_t) i] = custom[i];
         juce::MemoryBlock st;
         fp.getStateInformation (st);
@@ -2041,6 +2041,27 @@ int main (int argc, char** argv)
             excursion = cents (f.back(), f.front());
             return f[f.size() / 2];
         };
+        // Note tags that change and change back within 50 ms while a partial sounds (each would wiggle its pitch under Tune)
+        auto shortTagSegments = [] (const ResynthData& d)
+        {
+            const int S = d.numSlots, hold = (int) std::lround (0.05 * d.frameRate);
+            int bad = 0;
+            for (int s = 0; s < S; ++s)
+                for (int f = 1, run = 1; f < d.numFrames; ++f)
+                {
+                    const size_t i = (size_t) f * (size_t) S + (size_t) s;
+                    const bool on = d.amp[i] > 0.0f, wasOn = d.amp[i - (size_t) S] > 0.0f;
+                    if (on && wasOn && std::abs (d.noteMidi[i] - d.noteMidi[i - (size_t) S]) > 0.01f)
+                    {
+                        int j = f;
+                        while (j < d.numFrames && d.amp[(size_t) j * (size_t) S + (size_t) s] > 0.0f
+                               && std::abs (d.noteMidi[(size_t) j * (size_t) S + (size_t) s] - d.noteMidi[i]) < 0.01f) ++j;
+                        if (j < d.numFrames && d.amp[(size_t) j * (size_t) S + (size_t) s] > 0.0f && j - f < hold) ++bad;
+                    }
+                    run = on ? run + 1 : 0;
+                }
+            return bad;
+        };
         auto renderTuned = [&] (std::shared_ptr<ResynthData> d, int note, float tunePct, double secs)
         {
             q.setResynth (d);
@@ -2284,15 +2305,20 @@ int main (int argc, char** argv)
                     const auto [db, f] = peakIn (out, seg, target);
                     const float err = cents (f, target);
                     // what remains at the original pitch: the analysis blurs each chord change for ~0.1 s, and those
-                    // gliding partials carry one note's correction, so faint remains (> 18 dB down) are expected
+                    // gliding partials carry one note's correction, so faint remains (> 18 dB down) are expected.
+                    // Both notes of each chord land on the C3 series (one at C3, one at C4), so every upper-note
+                    // partial coincides with a lower-note partial and the two interfere; a target may measure 20 dB
+                    // down when the pair happens to cancel there, so its presence is only checked loosely.
                     const auto [left, leftHz] = peakIn (out, seg, hz);
-                    ok &= std::abs (err) < 2.0f && db > -30.0f && left < db - 18.0f;
+                    ok &= std::abs (err) < 2.0f && db > -45.0f && left < db - 18.0f;
                     rep << juce::String (hz, 0) << "->" << juce::String (target, 0) << "Hz " << juce::String (err, 1) << "c (" << juce::String (db, 0) << " dB, left " << juce::String (left, 0) << " dB at " << juce::String (leftHz, 1) << "); ";
                 }
             }
             // (timing is checked on the plucked string in test F: Tune never touches amplitudes or their timing)
+            const int flips = shortTagSegments (*d);
+            ok &= flips == 0;
             if (! ok) ++failures;
-            std::cout << (ok ? "ok   " : "FAIL ") << "Tuning J, chord progression (" << d->numNoteEvents << " note events): " << rep << "\n";
+            std::cout << (ok ? "ok   " : "FAIL ") << "Tuning J, chord progression (" << d->numNoteEvents << " note events, " << flips << " short tag flips): " << rep << "\n";
         }
 
         // Test K: overlapping notes. A3 (220 Hz) sustains 0-1.5 s; E4 (329.6 Hz) joins at 0.75 s. Key C puts both on
@@ -2328,10 +2354,11 @@ int main (int argc, char** argv)
                 return juce::Decibels::gainToDecibels (best * 4.0f / N, -120.0f);
             };
             const float atC4 = peakAt (261.63f), atB5 = peakAt (988.88f), atE4 = peakAt (329.63f);
+            const int flips = shortTagSegments (*d);
             const bool ok = std::abs (headErr) < 2.0f && atC4 > -30.0f && atB5 < atC4 - 25.0f && atE4 < -45.0f && d->numNoteEvents >= 2 && d->numNoteEvents <= 4
-                            && std::abs (d->firstNoteMidi - 57.0f) < 0.5f;
+                            && std::abs (d->firstNoteMidi - 57.0f) < 0.5f && flips == 0;
             if (! ok) ++failures;
-            std::cout << (ok ? "ok   " : "FAIL ") << "Tuning K, overlapping notes (" << d->numNoteEvents << " events): A3 alone -> C4 " << juce::String (headErr, 1)
+            std::cout << (ok ? "ok   " : "FAIL ") << "Tuning K, overlapping notes (" << d->numNoteEvents << " events, " << flips << " short tag flips): A3 alone -> C4 " << juce::String (headErr, 1)
                       << " c; with E4 joining: level at C4 " << juce::String (atC4, 1) << " dB, left at B5 (E4's 3rd harmonic) " << juce::String (atB5, 1) << " dB, at E4 " << juce::String (atE4, 1) << " dB\n";
         }
 
@@ -2857,6 +2884,122 @@ int main (int argc, char** argv)
         juce::StringArray names;
         for (auto& f : SeqPattern::factory()) names.add (f.name);
         std::cout << "     Patterns: " << names.joinIntoString (", ") << "\n";
+    }
+
+    // Sequencer retrigger. Engine: host playing from beat 1.25 (16ths, pattern C C# D D#), a new note at beat 1.625
+    // (half way through a step) restarts the pattern there: C at once, C# a 16th later. Without it the pattern follows
+    // the song position. Processor: with Retrigger on, a second key while the first is held restarts at the start step.
+    {
+        auto pat = SeqPattern::fromText ("t", "xxxx", "C C# D D#");
+        const double stepBeats = 0.25, spb = 48000.0 * 60.0 / 120.0;   // samples per beat at 120 BPM
+        auto run = [&] (bool retrigger)
+        {
+            SeqEngine eng;
+            std::vector<SeqEvent> ev;
+            juce::String played;
+            double ppq = 1.25;
+            for (int b = 0; b < 8; ++b)   // blocks of 1/8 beat
+            {
+                if (retrigger && b == 3) eng.retrigger();   // at beat 1.625
+                ev.clear();
+                eng.process (pat, (int) (spb / 8), 48000.0, 120.0, true, ppq, true, 60, stepBeats, 0.5f, 0.6f, ev);
+                for (auto& e : ev) if (e.on) played << (e.note - 60) << "@" << juce::String (ppq + e.offset / spb, 3) << " ";
+                ppq += 0.125;
+            }
+            return played.trim();
+        };
+        const auto plain = run (false), retrig = run (true);
+        const bool engineOk = plain == "1@1.250 2@1.500 3@1.750 0@2.000" && retrig == "1@1.250 2@1.500 0@1.625 1@1.875 2@2.125";
+
+        auto qp = std::make_unique<ElukkaAudioProcessor>();
+        auto& q = *qp;
+        FakePlayHead fph; fph.bpm = 120.0; fph.ppq = 0.0;
+        q.setPlayHead (&fph);
+        q.setPlayConfigDetails (0, 2, sr, block);
+        setP (q, "sq_on", 1.0f); setP (q, "sq_retrig", 1.0f); setP (q, "sq_rate", 1.0f);
+        q.prepareToPlay (sr, block);
+        q.pattern = SeqPattern::fromText ("t", "xxxx xxxx xxxx xxxx", "C C C C C C C C C C C C C C C C");
+        juce::AudioBuffer<float> buf (2, block);
+        int stepAfterSecond = -1;
+        for (int b = 0; b < 60; ++b)
+        {
+            juce::MidiBuffer midi;
+            if (b == 0) midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+            if (b == 40) midi.addEvent (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 100), 0);   // ~0.43 s in: step 6 or so
+            q.processBlock (buf, midi);
+            if (b == 40) stepAfterSecond = q.seq.displayStep.load();
+            fph.ppq += block / sr * fph.bpm / 60.0;
+        }
+        const bool procOk = stepAfterSecond == 0;
+        q.setPlayHead (nullptr);
+        const bool ok = engineOk && procOk;
+        if (! ok) ++failures;
+        std::cout << (ok ? "ok   " : "FAIL ") << "Sequencer retrigger: notes (semitones@beat) without " << plain << "; with a note at 1.625 " << retrig
+                  << "; in the plugin a second key restarts at step " << (stepAfterSecond + 1) << "\n";
+    }
+
+    // FX filter: a 24 dB low pass at 500 Hz keeps a 110 Hz sine and takes a 1760 Hz one down by 40 dB or more; the high
+    // pass does the opposite; off leaves the sound untouched; Macro 1 -> FX Filter Cutoff closes it from fully open;
+    // sweeping the cutoff during a note makes no clicks; a save from before the filter existed gets it after Distortion.
+    {
+        auto qp = std::make_unique<ElukkaAudioProcessor>();
+        auto& q = *qp;
+        q.setPlayConfigDetails (0, 2, sr, block);
+        setP (q, "o1_wave", (float) P::WSine); setP (q, "o1_level", 0.5f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f);
+        auto level = [&] (int note, float hz) { return juce::Decibels::gainToDecibels (measure (renderNotes (q, { note }, 1.6), 0, hz).first, -140.0f); };
+        const float dryLo = level (45, 110.0f), dryHi = level (93, 1760.0f);
+        setP (q, "fxf_on", 1.0f); setP (q, "fxf_cutoff", 500.0f);
+        const float lpLo = level (45, 110.0f) - dryLo, lpHi = level (93, 1760.0f) - dryHi;
+        setP (q, "fxf_type", 1.0f);   // high pass
+        const float hpLo = level (45, 110.0f) - dryLo, hpHi = level (93, 1760.0f) - dryHi;
+        setP (q, "fxf_type", 0.0f); setP (q, "fxf_cutoff", 20000.0f);
+        setP (q, "mx1_src", (float) P::SrcMacro1); setP (q, "mx1_dst", (float) P::DstFxfCutoff); setP (q, "mx1_amt", -0.9f); setP (q, "macro1", 1.0f);
+        const float macroHi = level (93, 1760.0f) - dryHi;
+        setP (q, "mx1_src", 0.0f); setP (q, "macro1", 0.0f);
+        setP (q, "fxf_on", 0.0f);
+        const float offHi = level (93, 1760.0f) - dryHi;
+
+        // cutoff swept 20 kHz -> 200 Hz -> 20 kHz over 0.6 s on a held sine at 131 Hz, resonance up (a sine: the click
+        // detector reads a saw's own edges as clicks)
+        setP (q, "fxf_on", 1.0f); setP (q, "fxf_res", 0.5f);
+        q.prepareToPlay (sr, block);
+        auto sweep = [&] (bool moving)
+        {
+            q.prepareToPlay (sr, block);
+            juce::AudioBuffer<float> o (2, (int) (sr * 1.2) / block * block), buf (2, block);
+            for (int b = 0; b < o.getNumSamples() / block; ++b)
+            {
+                juce::MidiBuffer midi;
+                if (b == 0) midi.addEvent (juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100), 0);
+                const double t = (double) b * block / sr, x = moving ? juce::jlimit (0.0, 1.0, 1.0 - std::abs ((t - 0.5) / 0.3)) : 0.0;
+                setP (q, "fxf_cutoff", (float) (20000.0 * std::pow (0.01, x)));
+                q.processBlock (buf, midi);
+                for (int ch = 0; ch < 2; ++ch) o.copyFrom (ch, b * block, buf, ch, 0, block);
+            }
+            return o;
+        };
+        auto out = sweep (true);
+        bool finite = true;
+        for (int i = 0; i < out.getNumSamples(); ++i) finite &= std::isfinite (out.getSample (0, i));
+        const auto clicks = detectClicks (out, 0.005f, 1000), still = detectClicks (sweep (false), 0.005f, 1000);
+
+        // an older save: FX order without "filter"
+        auto old = q.saveState();
+        old.setProperty ("fxOrder", "comb,ott,dist,delay,reverb,eq", nullptr);
+        ElukkaAudioProcessor fresh;
+        fresh.loadState (old);
+        juce::StringArray names;
+        for (auto& f : fresh.fxOrder) names.add (P::fxKeys[f.load()]);
+        const bool orderOk = names.joinIntoString (",") == "comb,ott,dist,filter,delay,reverb,eq";
+
+        const bool ok = std::abs (lpLo) < 1.0f && lpHi < -40.0f && hpHi > -1.0f && hpLo < -40.0f && macroHi < -20.0f && std::abs (offHi) < 0.01f
+                        && finite && clicks.clicks == 0 && orderOk;
+        if (! ok) ++failures;
+        std::cout << (ok ? "ok   " : "FAIL ") << "FX filter: low pass 500 Hz: 110 Hz " << juce::String (lpLo, 1) << " dB, 1760 Hz " << juce::String (lpHi, 1)
+                  << " dB; high pass: 110 Hz " << juce::String (hpLo, 1) << " dB, 1760 Hz " << juce::String (hpHi, 1) << " dB; Macro 1 closing it: 1760 Hz "
+                  << juce::String (macroHi, 1) << " dB; off " << juce::String (offHi, 2) << " dB; cutoff sweep clicks " << clicks.clicks << " (worst " << juce::String (clicks.worst, 4)
+                  << "; same note unswept: " << still.clicks << ", worst " << juce::String (still.worst, 4) << ")"
+                  << "; old save's FX order -> " << names.joinIntoString (" > ") << "\n";
     }
 
     // ---- LFO smoothing, S&H retrigger, wet mixes, resynth position restart ----

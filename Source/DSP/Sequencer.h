@@ -54,7 +54,10 @@ struct SeqEvent
 class SeqEngine
 {
 public:
-    void reset() { running = false; sounding = false; lastStep = std::numeric_limits<int64_t>::min(); pendingOff = -1; }
+    void reset() { running = false; sounding = false; lastStep = std::numeric_limits<int64_t>::min(); pendingOff = -1; restartPending = false; }
+    // Retrigger: the next process() call restarts the pattern from its start step at its first sample, wherever the
+    // song position is (used on every new note when Retrigger is on)
+    void retrigger() { restartPending = true; }
 
     void process (const SeqPattern& pat, int numSamples, double sampleRate, double bpm, bool hostPlaying, double ppqStart,
                   bool keyHeld, int rootNote, double stepBeats, float gate, float accentAmount, std::vector<SeqEvent>& out);
@@ -66,9 +69,12 @@ private:
     void triggerStep (const SeqPattern& pat, int64_t absStep, int offset, int rootNote, double stepSamples,
                       float gate, float accentAmount, std::vector<SeqEvent>& out);
 
-    bool running = false, sounding = false, currentSlide = false;
+    bool running = false, sounding = false, currentSlide = false, restartPending = false;
     int currentNote = 60;
     int64_t lastStep = std::numeric_limits<int64_t>::min();
     double internalBeat = 0.0;
+    // Steps count from this beat (the retriggering note's song position); valid only for the clock it was taken from
+    double originBeat = 0.0;
+    bool originHost = false;
     int64_t pendingOff = -1;
 };

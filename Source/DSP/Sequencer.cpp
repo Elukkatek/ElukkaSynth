@@ -215,10 +215,22 @@ void SeqEngine::process (const SeqPattern& pat, int numSamples, double sampleRat
     {
         running = true;
         internalBeat = 0.0;
+        originBeat = 0.0;
         lastStep = std::numeric_limits<int64_t>::min();
     }
+    if (restartPending)
+    {
+        // restart from the start step now: the clock counts from here; no slide into it from the previous note
+        restartPending = false;
+        internalBeat = 0.0;
+        originHost = hostPlaying;
+        originBeat = hostPlaying ? ppqStart : 0.0;
+        lastStep = std::numeric_limits<int64_t>::min();
+        currentSlide = false;
+    }
+    if (originBeat != 0.0 && originHost != hostPlaying) originBeat = 0.0;   // the transport started or stopped: back to its clock
 
-    const double pos0 = hostPlaying ? ppqStart : internalBeat;
+    const double pos0 = (hostPlaying ? ppqStart : internalBeat) - originBeat;
 
     auto stepAt = (int64_t) std::floor (pos0 / stepBeats + 1.0e-9);
     if (stepAt != lastStep)
