@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "DSP/Sequencer.h"
+#include "Params.h"
 
 class ElukkaAudioProcessor;
 
@@ -8,7 +9,7 @@ struct FactoryPreset
 {
     juce::String name, category;
     std::vector<std::pair<juce::String, float>> values;
-    int shape[2] { 5, 0 };            // ModShape preset index per mod unit (Mod 1 defaults to Decay)
+    int shape[P::numMods] { 5, 0, 0 };   // ModShape preset index per mod unit (Mod 1 defaults to Decay)
     std::vector<float> gain, depth;   // optional harmonic tables
     int pattern = -1;                 // index into SeqPattern::factory(), -1 = Init pattern
     int image = -1;                   // generated resynthesis image (see presetImage), -1 = none

@@ -170,8 +170,8 @@ class SynthPage : public Page
 public:
     explicit SynthPage (ElukkaAudioProcessor& p);
     void resized() override;
-    void refresh() override { mod1.refresh(); mod2.refresh(); }
-    void tick() override { mod1.tick(); mod2.tick(); sh.tick(); }
+    void refresh() override { for (auto* m : mods) m->refresh(); }
+    void tick() override { for (auto* m : mods) m->tick(); sh.tick(); }
 
 private:
     OscPanel o1, o2, o3;
@@ -184,7 +184,12 @@ private:
     Panel ampPanel { "AMP ENVELOPE / VOICE" };
     Knob a, d, s, r, glide, bend, bassFreq;
     Choice polyMode;
-    ModPanel mod1, mod2;
+    // one wide panel showing Mod 1, 2 or 3, picked with the tabs in its header
+    ModPanel mod1, mod2, mod3;
+    ModPanel* mods[P::numMods] { &mod1, &mod2, &mod3 };
+    juce::TextButton modTabs[P::numMods];
+    int modTab = 0;
+    void showMod (int i);
     ShPanel sh;
 };
 

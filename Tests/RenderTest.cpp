@@ -1172,6 +1172,13 @@ int main (int argc, char** argv)
                 { 12000, on (52) }, { 14000, on (54) }, { 20000, on (56) }, { 26000, on (58) } }, 1.0 },
             { "Sequencer 1/16 retriggers", [&] (ElukkaAudioProcessor& q) { sineBase (q); setP (q, "sq_on", 1.0f); setP (q, "sq_gate", 1.0f); },
               { { 0, on (48) } }, 2.0 },
+            { "Mono retrigger, filter engaged (19 kHz, res 0.5)", [&] (ElukkaAudioProcessor& q) { sineBase (q); setP (q, "polyMode", 1.0f);
+                setP (q, "flt_cutoff", 19000.0f); setP (q, "flt_res", 0.5f); },
+              { { 0, on (48) }, { S / 4, on (55) }, { S / 2, on (52) }, { S * 3 / 4, off (52) } }, 1.0 },
+            { "Voice stealing, filter engaged (19 kHz, res 0.5)", [&] (ElukkaAudioProcessor& q) { sineBase (q); setP (q, "ampR", 2.0f);
+                setP (q, "flt_cutoff", 19000.0f); setP (q, "flt_res", 0.5f); },
+              { { 0, on (40) }, { 2000, on (42) }, { 4000, on (44) }, { 6000, on (46) }, { 8000, on (48) }, { 10000, on (50) },
+                { 12000, on (52) }, { 14000, on (54) }, { 20000, on (56) }, { 26000, on (58) } }, 1.0 },
             { "LFO on osc level (fast)", [&] (ElukkaAudioProcessor& q) { sineBase (q); setP (q, "m1_mode", 0.0f); setP (q, "m1_rate", 8.0f);
                 setP (q, "mx1_src", (float) P::SrcMod1); setP (q, "mx1_dst", (float) P::DstO1Level); setP (q, "mx1_amt", -0.8f); },
               { { 0, on (48) } }, 1.5 },
@@ -2936,6 +2943,169 @@ int main (int argc, char** argv)
         if (! ok) ++failures;
         std::cout << (ok ? "ok   " : "FAIL ") << "Sequencer retrigger: notes (semitones@beat) without " << plain << "; with a note at 1.625 " << retrig
                   << "; in the plugin a second key restarts at step " << (stepAfterSecond + 1) << "\n";
+    }
+
+    // Ping-pong delay: a click into a fully wet ping-pong (1/8 at 120 BPM, feedback 0.5): echoes alternate left and right,
+    // the first right echo as loud as the first left one, both sides equally loud overall, and each round trip (left to
+    // left) down by feedback squared
+    {
+        FXChain chain;
+        const int len = (int) (sr * 3.0);
+        chain.prepare (sr, len);
+        FXParams fp;
+        fp.dlyOn = true; fp.dlySync = true; fp.dlyBeats = 0.5f; fp.dlyFb = 0.5f; fp.dlyMix = 1.0f; fp.dlyPingPong = true;
+        std::vector<float> L ((size_t) len, 0.0f), R ((size_t) len, 0.0f);
+        L[0] = R[0] = 1.0f;
+        FXChain::Order order;
+        for (int i = 0; i < P::NumFx; ++i) order[(size_t) i] = P::defaultFxOrder[i];
+        chain.process (L.data(), R.data(), len, fp, 120.0, order);
+        const int d = (int) (0.25 * sr);
+        auto peak = [&] (const std::vector<float>& x, int k) { float m = 0.0f; for (int i = k * d - 50; i < k * d + 50; ++i) m = std::max (m, std::abs (x[(size_t) i])); return m; };
+        auto db = [] (float a, float b) { return juce::Decibels::gainToDecibels (a / b, -200.0f); };
+        double eL = 0.0, eR = 0.0;
+        for (int i = 0; i < len; ++i) { eL += L[(size_t) i] * L[(size_t) i]; eR += R[(size_t) i] * R[(size_t) i]; }
+        const float firstLR = db (peak (R, 2), peak (L, 1)), overall = (float) (10.0 * std::log10 (eR / eL)), roundTrip = db (peak (L, 3), peak (L, 1));
+        const bool alternate = peak (R, 1) < 0.01f * peak (L, 1) && peak (L, 2) < 0.01f * peak (R, 2);
+        const bool ok = std::abs (firstLR) < 0.5f && std::abs (overall) < 0.5f && std::abs (roundTrip - 20.0f * std::log10 (0.25f)) < 0.5f && alternate;
+        if (! ok) ++failures;
+        std::cout << (ok ? "ok   " : "FAIL ") << "Ping-pong delay: first right echo vs first left " << juce::String (firstLR, 2) << " dB, right vs left overall "
+                  << juce::String (overall, 2) << " dB, round trip " << juce::String (roundTrip, 1) << " dB (feedback 0.5 squared = -12.0), alternating "
+                  << (alternate ? "yes" : "no") << "\n";
+    }
+
+    // Mod 3: a third mod unit like Mod 1/2. A square LFO at 4 Hz on Osc 1 Level (per voice) and on Master (global) makes
+    // the level swing; its shape is saved with the state; a save from before Mod 3 gets the sine shape; presets set it.
+    {
+        auto swing = [&] (int dst)
+        {
+            auto qp = std::make_unique<ElukkaAudioProcessor>();
+            auto& q = *qp;
+            q.setPlayConfigDetails (0, 2, sr, block);
+            setP (q, "o1_wave", (float) P::WSine); setP (q, "o1_level", 0.5f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f);
+            setP (q, "m3_mode", 0.0f); setP (q, "m3_rate", 4.0f);
+            q.shapes[2].setPoints (ModShape::preset (4));   // square
+            setP (q, "mx1_src", (float) P::SrcMod3); setP (q, "mx1_dst", (float) dst); setP (q, "mx1_amt", -0.8f);
+            auto out = renderNotes (q, { 60 }, 1.5);
+            float lo = 1.0e9f, hi = 0.0f;   // RMS per 20 ms window over the sustain
+            for (int st = (int) (0.3 * sr); st + (int) (0.02 * sr) < out.getNumSamples(); st += (int) (0.02 * sr))
+            {
+                const float r = out.getRMSLevel (0, st, (int) (0.02 * sr));
+                lo = std::min (lo, r); hi = std::max (hi, r);
+            }
+            return juce::Decibels::gainToDecibels (hi / std::max (lo, 1.0e-9f));
+        };
+        const float voiceSwing = swing (P::DstO1Level), globalSwing = swing (P::DstMaster);
+
+        auto ap = std::make_unique<ElukkaAudioProcessor>(), bp = std::make_unique<ElukkaAudioProcessor>();   // heap: main's stack is small
+        auto& a = *ap;
+        auto& b = *bp;
+        a.shapes[2].setPoints (ModShape::preset (8));
+        const auto saved = a.saveState();
+        b.loadState (saved);
+        bool shapeOk = b.shapes[2].getPoints().size() == ModShape::preset (8).size();
+        auto old = saved.createCopy();
+        old.removeChild (old.getChildWithName ("Shape3"), nullptr);
+        b.loadState (old);
+        shapeOk &= b.shapes[2].getPoints().size() == ModShape::preset (0).size();
+        b.shapes[2].setPoints (ModShape::preset (8));
+        b.presets.load (0);   // Init
+        shapeOk &= b.shapes[2].getPoints().size() == ModShape::preset (0).size();
+        const bool namesOk = P::modSources[P::SrcMod3] == "Mod 3" && P::destForParam ("m3_rate") == P::DstM3Rate
+                             && P::tableModSrcMap[P::tableModSources.indexOf ("Mod 3")] == P::SrcMod3;
+
+        const bool ok = voiceSwing > 6.0f && globalSwing > 6.0f && shapeOk && namesOk;
+        if (! ok) ++failures;
+        std::cout << (ok ? "ok   " : "FAIL ") << "Mod 3: square LFO swings Osc 1 Level by " << juce::String (voiceSwing, 1) << " dB (per voice) and Master by "
+                  << juce::String (globalSwing, 1) << " dB (global); shape saved, old saves and presets reset it (" << (shapeOk ? "yes" : "no") << ")\n";
+    }
+
+    // Cutoff knobs (voice filter and FX filter) are logarithmic: every octave takes the same knob distance, 20 Hz at 0,
+    // 632 Hz in the middle, 20 kHz at the end; values survive the round trip
+    {
+        auto qp = std::make_unique<ElukkaAudioProcessor>();
+        auto& q = *qp;
+        bool ok = true;
+        juce::String rep;
+        for (auto id : { "flt_cutoff", "fxf_cutoff" })
+        {
+            auto* prm = q.apvts.getParameter (id);
+            for (float x : { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f })
+            {
+                const float hz = prm->convertFrom0to1 (x), expected = 20.0f * std::pow (1000.0f, x);
+                ok &= std::abs (1200.0f * std::log2 (hz / expected)) < 1.0f && std::abs (prm->convertTo0to1 (hz) - x) < 1.0e-4f;
+                if (juce::String (id) == "flt_cutoff") rep << juce::String (x * 100.0f, 0) << "% " << juce::String (hz, 0) << " Hz; ";
+            }
+            ok &= std::abs (prm->getDefaultValue() - 1.0f) < 1.0e-6f;   // default fully open
+        }
+        if (! ok) ++failures;
+        std::cout << (ok ? "ok   " : "FAIL ") << "Cutoff knobs logarithmic (both filters): " << rep << "\n";
+    }
+
+    // Filter key tracking with the sequencer: at Key Track 100% the filter follows each sequenced note, so a C3 step and
+    // a C4 step have the same balance of 3rd harmonic to fundamental (as when the notes are played by hand); at 0% the
+    // higher note is duller. The Key mod source follows the sequenced note too (Key -> Osc 2 Level).
+    {
+        auto qp = std::make_unique<ElukkaAudioProcessor>();
+        auto& q = *qp;
+        FakePlayHead fph; fph.playing = false; fph.bpm = 120.0;
+        q.setPlayHead (&fph);
+        q.setPlayConfigDetails (0, 2, sr, block);
+        setP (q, "o1_wave", (float) P::WSaw); setP (q, "o1_level", 0.5f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f);
+        setP (q, "flt_cutoff", 400.0f); setP (q, "flt_res", 0.0f);
+        setP (q, "ampR", 0.005f);   // no tail from the previous step under the next one (C3's 2nd harmonic is C4's fundamental)
+        // balance (dB) of the 3rd harmonic against the fundamental in [t0, t0 + 0.15 s]
+        auto balance = [&] (const juce::AudioBuffer<float>& b, double t0, float f0)
+        {
+            auto mag = [&] (float hz)
+            {
+                const int a = (int) (t0 * sr), n = (int) (0.15 * sr);
+                double re = 0.0, im = 0.0;
+                for (int i = 0; i < n; ++i)
+                {
+                    const double w = 0.5 - 0.5 * std::cos (juce::MathConstants<double>::twoPi * i / n), ph = juce::MathConstants<double>::twoPi * hz * i / sr;
+                    re += w * b.getSample (0, a + i) * std::cos (ph); im += w * b.getSample (0, a + i) * std::sin (ph);
+                }
+                return std::hypot (re, im);
+            };
+            return (float) juce::Decibels::gainToDecibels (mag (3.0f * f0) / mag (f0), -200.0);
+        };
+        auto seqRun = [&] (float keyPct, const char* pitches = "C ^C")
+        {
+            setP (q, "flt_key", keyPct);
+            setP (q, "sq_on", 1.0f); setP (q, "sq_rate", 0.0f); setP (q, "sq_gate", 0.95f);   // 1/8 steps: 0.25 s at 120 BPM
+            q.pattern = SeqPattern::fromText ("t", "xx", pitches);
+            auto out = renderNotes (q, { 48 }, 1.0);
+            setP (q, "sq_on", 0.0f);
+            return std::make_pair (balance (out, 0.55, 130.81f), balance (out, 0.3, 261.63f));   // steps 3 (C3, 0.5 s) and 2 (C4, 0.25 s)
+        };
+        auto handRun = [&] (float keyPct)
+        {
+            setP (q, "flt_key", keyPct);
+            return std::make_pair (balance (renderNotes (q, { 48 }, 0.6), 0.3, 130.81f), balance (renderNotes (q, { 60 }, 0.6), 0.3, 261.63f));
+        };
+        const auto seq100 = seqRun (100.0f), seq0 = seqRun (0.0f), hand100 = handRun (100.0f);
+        // the extended range: -100% inverts (C4's cutoff two octaves below C3's: the C4 step much darker), +200% doubles
+        // (the C4 step brighter); each matches the same notes played by hand
+        const auto seqNeg = seqRun (-100.0f), handNeg = handRun (-100.0f), seq200 = seqRun (200.0f), hand200 = handRun (200.0f);
+        const float negDiff = seqNeg.second - seqNeg.first, dblDiff = seq200.second - seq200.first;
+        const bool rangeOk = negDiff < -15.0f && dblDiff > 5.0f && std::abs (negDiff - (handNeg.second - handNeg.first)) < 1.5f
+                             && std::abs (dblDiff - (hand200.second - hand200.first)) < 1.5f;
+        const auto slid = seqRun (100.0f, "C~ ^C~");   // every step slides into the next (one voice glides between them)
+        fph.playing = true; fph.ppq = 0.0;
+        const auto hostPlaying = seqRun (100.0f);
+        fph.playing = false;
+        setP (q, "flt_slope", 1.0f);
+        const auto slope12 = seqRun (100.0f);
+        setP (q, "flt_slope", 0.0f);
+        std::cout << "     key tracking variants (C4 minus C3, dB): slides " << juce::String (slid.second - slid.first, 1) << ", host playing "
+                  << juce::String (hostPlaying.second - hostPlaying.first, 1) << ", 12 dB " << juce::String (slope12.second - slope12.first, 1) << "\n";
+        const float seqDiff = seq100.second - seq100.first, handDiff = hand100.second - hand100.first, flatDiff = seq0.second - seq0.first;
+        q.setPlayHead (nullptr);
+        const bool ok = std::abs (seqDiff) < 1.5f && std::abs (seqDiff - handDiff) < 1.5f && flatDiff < -6.0f && rangeOk;
+        if (! ok) ++failures;
+        std::cout << (ok ? "ok   " : "FAIL ") << "Filter key tracking with the sequencer: 3rd harmonic vs fundamental, C4 step minus C3 step: Key Track 100% "
+                  << juce::String (seqDiff, 1) << " dB (by hand " << juce::String (handDiff, 1) << " dB), 0% " << juce::String (flatDiff, 1) << " dB, -100% "
+                  << juce::String (negDiff, 1) << " dB, +200% " << juce::String (dblDiff, 1) << " dB\n";
     }
 
     // FX filter: a 24 dB low pass at 500 Hz keeps a 110 Hz sine and takes a 1760 Hz one down by 40 dB or more; the high

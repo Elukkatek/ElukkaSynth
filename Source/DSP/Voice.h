@@ -36,8 +36,8 @@ struct VoiceContext
     double sampleRate = 44100.0;
     OscParams osc[P::numOscs];
     HarmParams harm;
-    ModUnitParams mod[2];
-    const ModShape* shapes[2] {};
+    ModUnitParams mod[P::numMods];
+    const ModShape* shapes[P::numMods] {};
     const float* harmGain = nullptr;
     const float* harmDepth = nullptr;
     MatrixSlot matrix[P::numMatrixSlots];
@@ -54,7 +54,7 @@ struct VoiceContext
     FilterParams filter;
     juce::ADSR::Parameters filterEnv;
     float sh = 0.0f;   // current S&H random value
-    double freeRunPhase[2] {};
+    double freeRunPhase[P::numMods] {};
     const FFTBank* fft = nullptr;
     float* work = nullptr;
     juce::Random* rng = nullptr;
@@ -93,7 +93,7 @@ public:
     int note = 60;
     uint64_t age = 0;
     float envValue = 0.0f;
-    float modValue[2] {};
+    float modValue[P::numMods] {};
     double rsPlayTime = 0.0;   // resynth source position (seconds) used in the last block, for the UI
 
 private:
@@ -104,7 +104,7 @@ private:
     double sr = 44100.0;
     Envelope amp, filterEnv;
     VoiceFilter filter;
-    ModUnit mods[2];
+    ModUnit mods[P::numMods];
     SpectralOsc oscs[P::numOscs];
     PartialBank banks[P::numOscs];
     float levels[P::numOscs] {};
@@ -140,6 +140,7 @@ private:
     // De-click: when a sounding voice is restarted (retrigger, voice stealing, sequencer) the jump between
     // the old and new waveform is bridged by an offset that fades out over a few milliseconds.
     float lastOutL = 0.0f, lastOutR = 0.0f, declickL = 0.0f, declickR = 0.0f, declickCoef = 0.99f;
+    float lastPreL = 0.0f, lastPreR = 0.0f, preDeclickL = 0.0f, preDeclickR = 0.0f;   // same, before the filter
     bool declickPending = false;
     bool filterEngaged = false;   // once the filter runs during a note it keeps running until the note ends
 };

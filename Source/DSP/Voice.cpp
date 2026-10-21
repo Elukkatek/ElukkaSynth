@@ -29,14 +29,14 @@ void Voice::start (int n, float vel, const VoiceContext& c, float glideSec, bool
     amp.noteOn();
     filterEnv.setParameters (c.filterEnv);
     filterEnv.noteOn();
-    if (! active) { filter.reset(); filterEngaged = false; lastOutL = lastOutR = 0.0f; }
+    if (! active) { filter.reset(); filterEngaged = false; lastOutL = lastOutR = lastPreL = lastPreR = preDeclickL = preDeclickR = 0.0f; }
     else declickPending = true;
     // Values read only at note-on use the previous block's modulation.
     auto* ranges = c.destRanges;
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < P::numMods; ++i)
     {
         auto mp = c.mod[i];
-        mp.start = applyMod (ranges[i == 0 ? P::DstM1Start : P::DstM2Start], mp.start, lastOff[i == 0 ? P::DstM1Start : P::DstM2Start]);
+        mp.start = applyMod (ranges[P::modStartDst[i]], mp.start, lastOff[P::modStartDst[i]]);
         mods[i].trigger (mp, *c.rng, c.freeRunPhase[i]);
     }
     for (int i = 0; i < P::numOscs; ++i)
@@ -127,12 +127,12 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
     auto* ranges = c.destRanges;
 
     // Modulation sources (rate modulation uses the previous block's matrix values)
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < P::numMods; ++i)
     {
         auto mp = c.mod[i];
         // Rate modulation acts on whichever rate knob is showing: Hz when free, the sync rate when synced
-        const int rateDst = i == 0 ? P::DstM1Rate : P::DstM2Rate;
-        const int syncDst = i == 0 ? P::DstM1SyncRate : P::DstM2SyncRate;
+        const int rateDst = P::modRateDst[i];
+        const int syncDst = P::modSyncDst[i];
         if (mp.syncIndex >= 0)
         {
             if (lastOff[syncDst] != 0.0f)
@@ -149,14 +149,13 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
         double locked = -1.0;
         if (mp.syncIndex >= 0 && ! mp.retrig && c.hostPlaying)
             locked = ModUnit::songPhase (c.ppq, c.hostBpm / 60.0 / mp.rateHz, mp.start);
-        const int smoothDst = i == 0 ? P::DstM1Smooth : P::DstM2Smooth;
+        const int smoothDst = P::modSmoothDst[i];
         if (lastOff[smoothDst] != 0.0f)
             mp.smoothMs = applyMod (ranges[smoothDst], mp.smoothMs, lastOff[smoothDst]);
         modValue[i] = mods[i].process (mp, *c.shapes[i], n, sr, *c.rng, locked);
     }
     float src[P::NumSrc] {};
-    src[P::SrcMod1] = modValue[0];
-    src[P::SrcMod2] = modValue[1];
+    for (int i = 0; i < P::numMods; ++i) src[P::modSrc[i]] = modValue[i];
     src[P::SrcAmpEnv] = envValue;
     src[P::SrcVel] = velocity;
     src[P::SrcModWheel] = c.modWheel;
@@ -191,12 +190,13 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
     fenvParams.release = applyMod (ranges[P::DstFltR], fenvParams.release, off[P::DstFltR]);
     filterEnv.setParameters (fenvParams);
     // Bypassed only while the filter's own settings are fully open and nothing in the matrix modulates it;
-    // once engaged during a note it stays engaged (switching in and out of bypass would click).
+    // once engaged during a note it stays engaged (switching in and out of bypass would click). Key Track's 0 %
+    // is not exactly 0 after the parameter's step snapping (-200..200 in 0.1 steps), so it counts as off below 0.05 %.
     bool filterModulated = false;
     for (auto& slot : c.matrix)
         filterModulated |= slot.src != P::SrcNone && slot.dst >= P::DstFltCutoff && slot.dst <= P::DstFltR;
     if (! filterEngaged && (filterModulated || ! (fp.type == VoiceFilter::LowPass && fp.cutoff >= 19999.0f && fp.env == 0.0f
-                                                  && fp.key == 0.0f && fp.drive == 0.0f && fp.res == 0.0f)))
+                                                  && std::abs (fp.key) < 0.05f && fp.drive == 0.0f && fp.res == 0.0f)))
     {
         filterEngaged = true;
         filter.reset();
@@ -494,7 +494,22 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
         }
         const float fe = filterEnv.getNextSample();
         if (filterOn)
+        {
+            // Pre-filter de-click: the restarted oscillators step the filter's input, which the filter would pass
+            // as a transient after the post-gain stage below has already measured its (near zero) offset.
+            if (declickPending)
+            {
+                preDeclickL = lastPreL - l;
+                preDeclickR = lastPreR - r;
+            }
+            l += preDeclickL;
+            r += preDeclickR;
+            preDeclickL *= declickCoef;
+            preDeclickR *= declickCoef;
+            lastPreL = l;
+            lastPreR = r;
             filter.process (l, r, fltCutoff * std::exp2 (fltEnv * fe * 8.0f + fltKey * (pitch - 60.0f) / 12.0f));
+        }
         l += dryL;
         r += dryR;
         const float g = env * velGain;
@@ -516,5 +531,6 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
         R[s] += outR;
     }
 
-    if (! amp.isActive()) { active = false; envValue = 0.0f; lastOutL = lastOutR = declickL = declickR = 0.0f; }
+    if (! amp.isActive()) { active = false; envValue = 0.0f; lastOutL = lastOutR = declickL = declickR = 0.0f;
+                             lastPreL = lastPreR = preDeclickL = preDeclickR = 0.0f; }
 }

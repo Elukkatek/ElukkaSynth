@@ -585,7 +585,7 @@ void OscPanel::resized()
 //==============================================================================
 // ModPanel
 ModPanel::ModPanel (ElukkaAudioProcessor& p, int i)
-    : Panel ("MOD " + juce::String (i + 1) + "  (LFO / ENVELOPE)"),
+    : Panel ("MOD"),   // the Mod 1 / 2 / 3 tabs sit next to the title (see SynthPage)
       proc (p), index (i),
       mode (p.apvts, P::mod (i, "mode"), "Mode"),
 
@@ -683,6 +683,17 @@ void ModPanel::tick()
     }
 }
 
+void SynthPage::showMod (int i)
+{
+    modTab = i;
+    for (int k = 0; k < P::numMods; ++k)
+    {
+        mods[k]->setVisible (k == i);
+        modTabs[k].setToggleState (k == i, juce::dontSendNotification);
+    }
+    mods[i]->refresh();
+}
+
 //==============================================================================
 ShPanel::ShPanel (ElukkaAudioProcessor& p)
     : Panel ("S&H RANDOM"), proc (p), rate (p.apvts, "sh_syncRate", "Rate"),
@@ -759,10 +770,21 @@ SynthPage::SynthPage (ElukkaAudioProcessor& p)
       a (p.apvts, "ampA", "Attack"), d (p.apvts, "ampD", "Decay"), s (p.apvts, "ampS", "Sustain"), r (p.apvts, "ampR", "Release"),
       glide (p.apvts, "glide", "Glide"), bend (p.apvts, "bendRange", "Bend"), bassFreq (p.apvts, "rs_bassFreq", "Bass Freq"),
       polyMode (p.apvts, "polyMode", "Voice Mode"),
-      mod1 (p, 0), mod2 (p, 1), sh (p)
+      mod1 (p, 0), mod2 (p, 1), mod3 (p, 2), sh (p)
 {
-    for (auto* c : std::initializer_list<juce::Component*> { &o1, &o2, &o3, &filterPanel, &ampPanel, &mod1, &mod2, &sh })
+    for (auto* c : std::initializer_list<juce::Component*> { &o1, &o2, &o3, &filterPanel, &ampPanel, &sh })
         addAndMakeVisible (c);
+    for (int i = 0; i < P::numMods; ++i)
+    {
+        addChildComponent (*mods[i]);
+        modTabs[i].setButtonText ("Mod " + juce::String (i + 1));
+        modTabs[i].setClickingTogglesState (true);
+        modTabs[i].setRadioGroupId (4343);
+        modTabs[i].setTooltip ("Show Mod " + juce::String (i + 1) + " (LFO / S&H / envelope with its own shape)");
+        modTabs[i].onClick = [this, i] { showMod (i); };
+        addAndMakeVisible (modTabs[i]);   // added after the panels: drawn on top of the panel header
+    }
+    showMod (0);
     for (auto* c : std::initializer_list<juce::Component*> { &fltType, &fltSlope, &fCutoff, &fRes, &fEnv, &fKey, &fDrive,
                                                               &fA, &fD, &fS, &fR, &fEnvLabel, &a, &d, &s, &r, &glide, &bend, &bassFreq, &polyMode,
                                                               &toFlt1, &toFlt2, &toFlt3, &fInputLabel })
@@ -778,7 +800,8 @@ SynthPage::SynthPage (ElukkaAudioProcessor& p)
     fEnvLabel.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
     fEnvLabel.setJustificationType (juce::Justification::centredRight);
     fEnv.slider.setTooltip ("How far the filter envelope moves the cutoff (up or down, up to 8 octaves)");
-    fKey.slider.setTooltip ("How much the cutoff follows the played note (100% = tracks the keyboard exactly)");
+    fKey.slider.setTooltip ("How much the cutoff follows the played note (100% = tracks the keyboard exactly, 200% = twice as much; "
+                            "negative = the other way: low notes brighter, high notes darker)");
     bassFreq.slider.setTooltip ("Crossover for the oscillators' Bass Mono switches and the resynth Sub Lift");
 }
 
@@ -818,10 +841,11 @@ void SynthPage::resized()
     area.removeFromLeft (8);
     sh.setBounds (area.removeFromRight (160));
     area.removeFromRight (8);
-    const int mw = (area.getWidth() - 8) / 2;
-    mod1.setBounds (area.removeFromLeft (mw));
-    area.removeFromLeft (8);
-    mod2.setBounds (area);
+    for (int i = 0; i < P::numMods; ++i)
+    {
+        mods[i]->setBounds (area);
+        modTabs[i].setBounds (area.getX() + 52 + i * 64, area.getY() + 4, 60, 20);
+    }
 
     auto c = ampPanel.getBounds().reduced (8).withTrimmedTop (20);
     const int kw = c.getWidth() / 4;

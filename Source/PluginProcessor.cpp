@@ -33,7 +33,7 @@ void ElukkaAudioProcessor::cacheParams()
         o.uniBlend = raw (P::osc (i, "uniBlend")); o.uniWidth = raw (P::osc (i, "uniWidth")); o.fmSrc = raw (P::osc (i, "fmSrc")); o.fmAmt = raw (P::osc (i, "fmAmt"));
         o.pan = raw (P::osc (i, "pan")); o.bassMono = raw (P::osc (i, "bassMono")); o.toFilter = raw (P::osc (i, "toFilter"));
     }
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < P::numMods; ++i)
     {
         auto& m = modRaw[i];
         m.mode = raw (P::mod (i, "mode")); m.rate = raw (P::mod (i, "rate")); m.sync = raw (P::mod (i, "sync"));
@@ -126,7 +126,7 @@ void ElukkaAudioProcessor::buildContext (double bpm)
     h.shimmer = hmShimmer->load(); h.shimmerRate = hmShimmerRate->load();
     h.tableSrc = idx (hmTableSrc); h.tableAmt = hmTableAmt->load();
 
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < P::numMods; ++i)
     {
         auto& m = modRaw[i];
         auto& c = ctx.mod[i];
@@ -231,7 +231,7 @@ void ElukkaAudioProcessor::voiceOn (int note, float vel, bool legato, float glid
             if (voices[seqVoice].held) voices[seqVoice].release();
             seqVoice = findVoice();
             voices[seqVoice].start (note, vel, ctx, glideSec, false);
-            for (int i = 0; i < 2; ++i) globalMods[i].trigger (ctx.mod[i], rng, globalMods[i].getPhase());
+            for (int i = 0; i < P::numMods; ++i) globalMods[i].trigger (ctx.mod[i], rng, globalMods[i].getPhase());
         }
         voices[seqVoice].age = ++ageCounter;
         return;
@@ -244,7 +244,7 @@ void ElukkaAudioProcessor::voiceOn (int note, float vel, bool legato, float glid
         else
         {
             v.start (note, vel, ctx, glideSec, true);
-            for (int i = 0; i < 2; ++i) globalMods[i].trigger (ctx.mod[i], rng, globalMods[i].getPhase());
+            for (int i = 0; i < P::numMods; ++i) globalMods[i].trigger (ctx.mod[i], rng, globalMods[i].getPhase());
         }
         v.age = ++ageCounter;
         return;
@@ -252,7 +252,7 @@ void ElukkaAudioProcessor::voiceOn (int note, float vel, bool legato, float glid
     auto& v = voices[findVoice()];
     v.start (note, vel, ctx, 0.0f, false);
     v.age = ++ageCounter;
-    for (int i = 0; i < 2; ++i) globalMods[i].trigger (ctx.mod[i], rng, globalMods[i].getPhase());
+    for (int i = 0; i < P::numMods; ++i) globalMods[i].trigger (ctx.mod[i], rng, globalMods[i].getPhase());
 }
 
 void ElukkaAudioProcessor::releaseNote (int note)
@@ -318,14 +318,14 @@ void ElukkaAudioProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
 
     // Global modulation (for FX and master destinations)
     float src[P::NumSrc] {};
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < P::numMods; ++i)
     {
         // synced LFOs with Retrig off follow the song position while the host plays
         const auto& m = ctx.mod[i];
         const double locked = m.syncIndex >= 0 && ! m.retrig && hostPlaying
                                   ? ModUnit::songPhase (ppq, P::syncRateBeats[m.syncIndex], m.start) : -1.0;
-        src[i == 0 ? P::SrcMod1 : P::SrcMod2] = globalMods[i].process (m, shapes[i], num, sr, rng, locked);
-        globalModValue[i] = src[i == 0 ? P::SrcMod1 : P::SrcMod2];
+        src[P::modSrc[i]] = globalMods[i].process (m, shapes[i], num, sr, rng, locked);
+        globalModValue[i] = src[P::modSrc[i]];
     }
     float env = 0.0f;
     uint64_t newest = 0;
@@ -423,8 +423,7 @@ void ElukkaAudioProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
         uiRsPos = (newestVoice != nullptr && usesResynth && ctx.resynth != nullptr && ctx.resynth->durationSec > 0.0)
                       ? (float) (newestVoice->rsPlayTime / ctx.resynth->durationSec) : -1.0f;
         uiPlaying = newestVoice != nullptr;
-        uiMod[0] = newestVoice != nullptr ? newestVoice->modValue[0] : 0.0f;
-        uiMod[1] = newestVoice != nullptr ? newestVoice->modValue[1] : 0.0f;
+        for (int i = 0; i < P::numMods; ++i) uiMod[i] = newestVoice != nullptr ? newestVoice->modValue[i] : 0.0f;
     }
 }
 
@@ -515,11 +514,11 @@ juce::ValueTree ElukkaAudioProcessor::saveState()
 {
     auto state = apvts.copyState();
     state.setProperty ("syncRates", P::numSyncRates, nullptr);   // saves without this used the list before "8 Bars" was added
-    for (auto type : { "Shape1", "Shape2", "HarmTables", "Pattern", "Resynth" })
+    for (auto type : { "Shape1", "Shape2", "Shape3", "HarmTables", "Pattern", "Resynth" })
         state.removeChild (state.getChildWithName (type), nullptr);
 
-    state.appendChild (shapes[0].toTree ("Shape1"), nullptr);
-    state.appendChild (shapes[1].toTree ("Shape2"), nullptr);
+    for (int i = 0; i < P::numMods; ++i)
+        state.appendChild (shapes[i].toTree ("Shape" + juce::String (i + 1)), nullptr);
 
     juce::ValueTree ht ("HarmTables");
     juce::String g, d;
@@ -547,7 +546,7 @@ void ElukkaAudioProcessor::loadState (const juce::ValueTree& t)
     if (! t.isValid() || ! t.hasType (apvts.state.getType())) return;
 
     auto params = t.createCopy();
-    for (auto type : { "Shape1", "Shape2", "HarmTables", "Pattern", "Resynth" })
+    for (auto type : { "Shape1", "Shape2", "Shape3", "HarmTables", "Pattern", "Resynth" })
         params.removeChild (params.getChildWithName (type), nullptr);
     // Older saves used a Freeverb-style reverb (Size = room size, Damping, Width, wet low/high pass). Its room size
     // set both the space and the tail length, so it becomes Size plus an equivalent Decay; Damping becomes Tone.
@@ -615,6 +614,9 @@ void ElukkaAudioProcessor::loadState (const juce::ValueTree& t)
 
     shapes[0].fromTree (t.getChildWithName ("Shape1"));
     shapes[1].fromTree (t.getChildWithName ("Shape2"));
+    // saves from before Mod 3 existed have no Shape3: it starts as the default sine
+    if (auto s3 = t.getChildWithName ("Shape3"); s3.isValid()) shapes[2].fromTree (s3);
+    else shapes[2].setPoints (ModShape::preset (0));
 
     resetHarmTables();
     auto ht = t.getChildWithName ("HarmTables");

@@ -342,8 +342,11 @@ private:
             float inL = L[i], inR = R[i];
             if (p.dlyPingPong)
             {
-                delay[0][(size_t) dlyPos] = (inL + inR) * 0.5f + rr * p.dlyFb;
-                delay[1][(size_t) dlyPos] = rl * p.dlyFb;
+                // Ping-pong: the input enters on the left; each right echo repeats the left one before it at the same
+                // level and the feedback acts once per round trip (fb squared), so both sides are equally loud and the
+                // tail dies away at the same rate as with feedback fb on every bounce (left 1, right 1, left fb^2, ...)
+                delay[0][(size_t) dlyPos] = (inL + inR) * 0.5f + rr * p.dlyFb * p.dlyFb;
+                delay[1][(size_t) dlyPos] = rl;
             }
             else
             {

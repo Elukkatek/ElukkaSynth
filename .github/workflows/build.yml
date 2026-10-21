@@ -105,7 +105,8 @@ jobs:
         run: xvfb-run -a build/ElukkaTest_artefacts/Release/ElukkaTest --host build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3
 
       - name: Run offline test suite
-        run: xvfb-run -a build/ElukkaTest_artefacts/Release/ElukkaTest
+        # the test's main() needs more than the default 8 MB stack (see CMakeLists.txt)
+        run: ulimit -s 65536 && xvfb-run -a build/ElukkaTest_artefacts/Release/ElukkaTest
 
   release:
     name: GitHub release (tags only)

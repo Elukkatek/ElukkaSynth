@@ -92,9 +92,11 @@ if(ELUKKA_BUILD_TESTS)
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_recommended_config_flags)
+    # The test's main() keeps many large buffers and processors on the stack (the frame is over 8 MB), more than the
+    # default main-thread stack anywhere: 64 MB. Linux takes the main stack from `ulimit -s` (the CI raises it).
     if(MSVC)
-        # The test's main() keeps many large buffers on the stack; Windows' default 1 MB main-thread
-        # stack is too small for it (the frame is ~7 MB with clang; macOS and Linux give 8 MB).
         target_link_options(ElukkaTest PRIVATE /STACK:67108864)
+    elseif(APPLE)
+        target_link_options(ElukkaTest PRIVATE -Wl,-stack_size,0x4000000)
     endif()
 endif()

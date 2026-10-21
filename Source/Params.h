@@ -48,8 +48,11 @@ inline const float dlyDivBeats[]           { 2.0f, 1.0f, 1.5f, 0.5f, 0.75f, 0.25
 
 // Modulation sources
 inline const juce::StringArray modSources { "None", "Mod 1", "Mod 2", "Amp Env", "Velocity", "Mod Wheel",
-                                            "Macro 1", "Macro 2", "Seq Accent", "Key", "S&H" };
-enum Src { SrcNone, SrcMod1, SrcMod2, SrcAmpEnv, SrcVel, SrcModWheel, SrcMacro1, SrcMacro2, SrcAccent, SrcKey, SrcSH, NumSrc };
+                                            "Macro 1", "Macro 2", "Seq Accent", "Key", "S&H", "Mod 3" };
+// Mod 3 was added later: appended so saved matrix settings keep their meaning
+enum Src { SrcNone, SrcMod1, SrcMod2, SrcAmpEnv, SrcVel, SrcModWheel, SrcMacro1, SrcMacro2, SrcAccent, SrcKey, SrcSH, SrcMod3, NumSrc };
+constexpr int numMods = 3;   // mod units (LFO / S&H / envelope), each with its own shape
+inline constexpr int modSrc[numMods] { SrcMod1, SrcMod2, SrcMod3 };
 
 inline const juce::StringArray phaseModes  { "Reset", "Random", "Spread" };   // Unison::PhaseMode
 inline const juce::StringArray detuneModes { "Linear", "Super" };              // Unison::DetuneMode
@@ -63,8 +66,8 @@ inline const char* fxKeys[NumFx] { "comb", "dist", "delay", "reverb", "eq", "ott
 inline const int defaultFxOrder[NumFx] { FxComb, FxOtt, FxDist, FxFilter, FxDelay, FxReverb, FxEq };
 
 // Source driving the per-harmonic "depth" table
-inline const juce::StringArray tableModSources { "Mod 1", "Mod 2", "Amp Env", "Macro 1", "Macro 2" };
-inline const Src tableModSrcMap[] { SrcMod1, SrcMod2, SrcAmpEnv, SrcMacro1, SrcMacro2 };
+inline const juce::StringArray tableModSources { "Mod 1", "Mod 2", "Amp Env", "Macro 1", "Macro 2", "Mod 3" };
+inline const Src tableModSrcMap[] { SrcMod1, SrcMod2, SrcAmpEnv, SrcMacro1, SrcMacro2, SrcMod3 };
 
 // Modulation destinations
 struct DestInfo { const char* name; const char* paramID; bool perVoice; };
@@ -94,8 +97,14 @@ enum Dst
     DstShimmer, DstShimmerRate,
     DstRsGate,
     DstFxfCutoff, DstFxfRes, DstFxfDrive,
+    DstM3Rate, DstM3Start, DstM3Smooth, DstM3SyncRate,
     NumDst
 };
+// each mod unit's own destinations
+inline constexpr int modRateDst[numMods]   { DstM1Rate, DstM2Rate, DstM3Rate };
+inline constexpr int modStartDst[numMods]  { DstM1Start, DstM2Start, DstM3Start };
+inline constexpr int modSmoothDst[numMods] { DstM1Smooth, DstM2Smooth, DstM3Smooth };
+inline constexpr int modSyncDst[numMods]   { DstM1SyncRate, DstM2SyncRate, DstM3SyncRate };
 
 inline const DestInfo dests[NumDst] =
 {
@@ -140,6 +149,8 @@ inline const DestInfo dests[NumDst] =
     { "Shimmer Amount", "hm_shimmer", true }, { "Shimmer Rate", "hm_shimmerRate", true },
     { "Resynth Gate", "rs_gate", true },
     { "FX Filter Cutoff", "fxf_cutoff", false }, { "FX Filter Resonance", "fxf_res", false }, { "FX Filter Drive", "fxf_drive", false },
+    { "Mod 3 Rate", "m3_rate", true }, { "Mod 3 Start", "m3_start", true }, { "Mod 3 Smooth", "m3_smooth", true },
+    { "Mod 3 Sync Rate", "m3_syncRate", true },
 };
 
 // Matrix destination for a parameter ID, or DstNone if it cannot be modulated.
@@ -203,6 +214,13 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         r.setSkewForCentre (centre);
         return r;
     };
+    // logarithmic: every octave takes the same knob distance (and the same modulation amount)
+    auto logarithmic = [] (float lo, float hi)
+    {
+        return NormalisableRange<float> (lo, hi,
+                                         [] (float s, float e, float p) { return s * std::pow (e / s, p); },
+                                         [] (float s, float e, float v) { return std::log (juce::jmax (v, s) / s) / std::log (e / s); });
+    };
 
     // Global
     addF ("master", "Master", { -48.0f, 6.0f, 0.01f }, -6.0f, "dB");
@@ -245,10 +263,11 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     // Voice filter (after the oscillators) with its own envelope
     addC ("flt_type", "Filter Type", filterTypes, 0);
     addC ("flt_slope", "Filter Slope", filterSlopes, 0);
-    addF ("flt_cutoff", "Filter Cutoff", skewed (20.0f, 20000.0f, 1000.0f), 20000.0f, "Hz");
+    addF ("flt_cutoff", "Filter Cutoff", logarithmic (20.0f, 20000.0f), 20000.0f, "Hz");
     addF ("flt_res", "Filter Resonance", { 0.0f, 1.0f }, 0.0f);
     addF ("flt_env", "Filter Env Amount", { -1.0f, 1.0f }, 0.0f);
-    addF ("flt_key", "Filter Key Track", { 0.0f, 100.0f, 0.1f }, 0.0f, "%");
+    // cutoff follows the note: 100% = an octave per octave from C4; negative = higher notes get a lower cutoff
+    addF ("flt_key", "Filter Key Track", { -200.0f, 200.0f, 0.1f }, 0.0f, "%");
     addF ("flt_drive", "Filter Drive", { 0.0f, 1.0f }, 0.0f);
     addF ("flt_A", "Filter Attack",  skewed (0.001f, 10.0f, 0.5f), 0.005f, "s");
     addF ("flt_D", "Filter Decay",   skewed (0.001f, 10.0f, 0.8f), 0.4f, "s");
@@ -276,7 +295,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     addF ("hm_tableAmt", "Harm Table Depth", { -1.0f, 1.0f }, 0.0f);
 
     // Mod units (LFO / S&H / Envelope)
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < numMods; ++i)
     {
         auto n = "Mod " + String (i + 1) + " ";
         addC (mod (i, "mode"), n + "Mode", modModes, i == 0 ? MEnvelope : MLfo);   // Mod 1 starts as a decay envelope
@@ -350,7 +369,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     addB ("fxf_on", "FX Filter On", false);
     addC ("fxf_type", "FX Filter Type", filterTypes, 0);
     addC ("fxf_slope", "FX Filter Slope", filterSlopes, 0);
-    addF ("fxf_cutoff", "FX Filter Cutoff", skewed (20.0f, 20000.0f, 1000.0f), 20000.0f, "Hz");
+    addF ("fxf_cutoff", "FX Filter Cutoff", logarithmic (20.0f, 20000.0f), 20000.0f, "Hz");
     addF ("fxf_res", "FX Filter Resonance", { 0.0f, 1.0f }, 0.0f);
     addF ("fxf_drive", "FX Filter Drive", { 0.0f, 1.0f }, 0.0f);
 

@@ -40,7 +40,7 @@ public:
     void loadState (const juce::ValueTree& t);
 
     // Non-parameter data edited by the UI (message thread)
-    ModShape shapes[2];
+    ModShape shapes[P::numMods];
     std::array<float, P::numHarmTable> harmGain {}, harmDepth {};
     SeqPattern pattern;
 
@@ -62,8 +62,8 @@ public:
     std::atomic<float> uiRsPos { -1.0f };   // resynth playback position (0..1) of the newest voice, -1 = not playing
 
     // Live values for the UI
-    std::atomic<float> uiMod[2] {};
-    std::atomic<float> globalModValue[2] {};   // the free-running mod units that drive FX destinations (for tests)
+    std::atomic<float> uiMod[P::numMods] {};
+    std::atomic<float> globalModValue[P::numMods] {};   // the free-running mod units that drive FX destinations (for tests)
     std::atomic<double> uiHostBpm { 120.0 };
     SeqEngine seq;
 
@@ -86,7 +86,7 @@ private:
     int findVoice();
 
     OscRaw oscRaw[P::numOscs] {};
-    ModRaw modRaw[2] {};
+    ModRaw modRaw[P::numMods] {};
     MxRaw mxRaw[P::numMatrixSlots] {};
     std::atomic<float> *pMaster {}, *pPoly {}, *pGlide {}, *pBend {}, *pA {}, *pD {}, *pS {}, *pR {};
     std::atomic<float> *hmStretch {}, *hmOddEven {}, *hmCutoff {}, *hmRes {}, *hmPrism {}, *hmPrismCenter {}, *hmPrismWidth {}, *hmShimmer {}, *hmShimmerRate {}, *hmTableSrc {}, *hmTableAmt {};
@@ -115,7 +115,7 @@ private:
     FFTBank fft;
     std::vector<float> work;
     juce::Random rng;
-    ModUnit globalMods[2];
+    ModUnit globalMods[P::numMods];
     std::vector<SeqEvent> seqEvents;
 
     std::shared_ptr<ResynthData> resynth;

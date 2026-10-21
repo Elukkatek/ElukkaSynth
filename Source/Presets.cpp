@@ -917,8 +917,7 @@ void PresetManager::applyFactory (const FactoryPreset& fp)
         if (auto* param = proc.apvts.getParameter (id))
             param->setValueNotifyingHost (param->convertTo0to1 (value));
 
-    proc.shapes[0].setPoints (ModShape::preset (fp.shape[0]));
-    proc.shapes[1].setPoints (ModShape::preset (fp.shape[1]));
+    for (int i = 0; i < P::numMods; ++i) proc.shapes[i].setPoints (ModShape::preset (fp.shape[i]));
     proc.resetHarmTables();
     proc.resetFxOrder();
     for (size_t i = 0; i < fp.gain.size() && i < proc.harmGain.size(); ++i) proc.harmGain[i] = fp.gain[i];
