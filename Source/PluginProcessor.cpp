@@ -383,6 +383,8 @@ void ElukkaAudioProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
     f.combLp = applyMod (destRanges[P::DstCombLp], f.combLp, off[P::DstCombLp]);
     f.combHp = applyMod (destRanges[P::DstCombHp], f.combHp, off[P::DstCombHp]);
     f.dlyMs = applyMod (destRanges[P::DstDlyTime], f.dlyMs, off[P::DstDlyTime]);
+    if (off[P::DstDlyDiv] != 0.0f)   // synced time: modulation steps through the note values (the delay glides between them)
+        f.dlyBeats = P::dlyDivBeats[juce::jlimit (0, 7, (int) std::lround (applyMod (destRanges[P::DstDlyDiv], (float) idx (dlyDiv), off[P::DstDlyDiv])))];
     f.dlyLp = applyMod (destRanges[P::DstDlyLp], f.dlyLp, off[P::DstDlyLp]);
     f.dlyHp = applyMod (destRanges[P::DstDlyHp], f.dlyHp, off[P::DstDlyHp]);
     f.rev.mod = applyMod (destRanges[P::DstRevLp], f.rev.mod * 100.0f, off[P::DstRevLp]) * 0.01f;      // slot: Reverb Mod
@@ -514,6 +516,7 @@ juce::ValueTree ElukkaAudioProcessor::saveState()
 {
     auto state = apvts.copyState();
     state.setProperty ("syncRates", P::numSyncRates, nullptr);   // saves without this used the list before "8 Bars" was added
+    state.setProperty ("dlyDivs", 2, nullptr);                    // saves without this used the old delay time order
     for (auto type : { "Shape1", "Shape2", "Shape3", "HarmTables", "Pattern", "Resynth" })
         state.removeChild (state.getChildWithName (type), nullptr);
 
@@ -571,6 +574,10 @@ void ElukkaAudioProcessor::loadState (const juce::ValueTree& t)
         for (auto id : { "m1_syncRate", "m2_syncRate", "sh_syncRate" })
             if (auto r = params.getChildWithProperty ("id", id); r.isValid())
                 r.setProperty ("value", (float) r["value"] + 1.0f, nullptr);
+    // Saves from before the synced delay times were sorted longest to shortest: remap the index.
+    if (! t.hasProperty ("dlyDivs"))
+        if (auto r = params.getChildWithProperty ("id", "dly_div"); r.isValid())
+            r.setProperty ("value", (float) P::dlyDivFromOld ((int) std::lround ((float) r["value"])), nullptr);
     // Saves from before S&H Retrigger existed behaved as if it were off (it is on by default now).
     if (! params.getChildWithProperty ("id", "sh_retrig").isValid())
     {

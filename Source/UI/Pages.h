@@ -347,7 +347,7 @@ private:
     std::unique_ptr<FxBox> boxes[P::NumFx];
     EqCurve* eqCurve = nullptr;
     OttMeter* ottMeter = nullptr;
-    Choice* dlyDiv = nullptr;
+    Knob* dlyDiv = nullptr;    // synced time and time in ms share a spot: Sync picks which one shows
     Knob* dlyTime = nullptr;
     juce::Label hint;
     int dragOffsetX = 0, dragTarget = -1;

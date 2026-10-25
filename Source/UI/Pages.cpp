@@ -774,15 +774,15 @@ SynthPage::SynthPage (ElukkaAudioProcessor& p)
 {
     for (auto* c : std::initializer_list<juce::Component*> { &o1, &o2, &o3, &filterPanel, &ampPanel, &sh })
         addAndMakeVisible (c);
-    for (int i = 0; i < P::numMods; ++i)
+    for (auto* m : mods) addChildComponent (*m);
+    for (int i = 0; i < P::numMods; ++i)   // tabs added after every panel, so no panel covers them
     {
-        addChildComponent (*mods[i]);
         modTabs[i].setButtonText ("Mod " + juce::String (i + 1));
         modTabs[i].setClickingTogglesState (true);
         modTabs[i].setRadioGroupId (4343);
         modTabs[i].setTooltip ("Show Mod " + juce::String (i + 1) + " (LFO / S&H / envelope with its own shape)");
         modTabs[i].onClick = [this, i] { showMod (i); };
-        addAndMakeVisible (modTabs[i]);   // added after the panels: drawn on top of the panel header
+        addAndMakeVisible (modTabs[i]);
     }
     showMod (0);
     for (auto* c : std::initializer_list<juce::Component*> { &fltType, &fltSlope, &fCutoff, &fRes, &fEnv, &fKey, &fDrive,
@@ -1497,21 +1497,21 @@ FxPage::FxPage (ElukkaAudioProcessor& p) : proc (p)
         auto& b = *(boxes[P::FxDelay] = std::make_unique<FxBox> ("DELAY", P::FxDelay));
         auto* on = &b.add<Toggle> (s, "dly_on", "On");
         auto* sync = &b.add<Toggle> (s, "dly_sync", "Sync");
-        dlyDiv = &b.add<Choice> (s, "dly_div", "Synced Time");
+        dlyDiv = &b.add<Knob> (s, "dly_div", "Time");
         dlyTime = &b.add<Knob> (s, "dly_time", "Time (ms)");
+        dlyDiv->slider.setTooltip ("Synced delay time, from 1/2 to 1/16 (D = dotted, T = triplet). Double-click to type");
         std::vector<juce::Component*> knobs { dlyTime, &b.add<Knob> (s, "dly_fb", "Feedback"), &b.add<Knob> (s, "dly_lp", "Low Pass"),
                                               &b.add<Knob> (s, "dly_hp", "High Pass"), &b.add<Knob> (s, "dly_mix", "Mix") };
         auto* pp = &b.add<Toggle> (s, "dly_pp", "Ping-Pong");
         auto* div = dlyDiv;
-        b.layout = [on, sync, div, knobs, pp] (juce::Rectangle<int> c)
+        auto* ms = dlyTime;
+        b.layout = [on, sync, div, ms, knobs, pp] (juce::Rectangle<int> c)
         {
             auto top = c.removeFromTop (26);
             on->setBounds (top.removeFromLeft (70));
             top.removeFromLeft (6);
             sync->setBounds (top.removeFromLeft (76));
             c.removeFromTop (8);
-            div->setBounds (c.removeFromTop (40));
-            c.removeFromTop (10);
             const int kw = c.getWidth() / 2;
             juce::Rectangle<int> row;
             for (size_t i = 0; i < knobs.size(); ++i)
@@ -1519,6 +1519,7 @@ FxPage::FxPage (ElukkaAudioProcessor& p) : proc (p)
                 if (i % 2 == 0) { row = c.removeFromTop (70); c.removeFromTop (8); }
                 knobs[i]->setBounds (row.removeFromLeft (kw));
             }
+            div->setBounds (ms->getBounds());
             pp->setBounds (c.removeFromTop (26).removeFromLeft (110));
         };
     }
@@ -1610,6 +1611,7 @@ FxPage::FxPage (ElukkaAudioProcessor& p) : proc (p)
         b->onDrag = [this] (FxBox& box, const juce::MouseEvent& e, int phase) { handleDrag (box, e, phase); };
         addAndMakeVisible (*b);
     }
+    tick();   // shows the delay time knob that matches Sync right away
     hint.setText ("Signal flows left to right. Drag an effect box to change the order.", juce::dontSendNotification);
     hint.setColour (juce::Label::textColourId, Col::dim);
     hint.setFont (juce::Font (juce::FontOptions (11.5f)));
@@ -1620,14 +1622,12 @@ void FxPage::tick()
 {
     if (eqCurve != nullptr) eqCurve->tick();
     if (ottMeter != nullptr) ottMeter->tick();
-    // Only the active delay time control is enabled
+    // The delay's time knob shows the synced time when Sync is on, milliseconds when off (like the LFO rate)
     const bool synced = proc.apvts.getRawParameterValue ("dly_sync")->load() > 0.5f;
-    if (dlyDiv->isEnabled() != synced)
+    if (dlyDiv->isVisible() != synced || dlyTime->isVisible() == synced)
     {
-        dlyDiv->setEnabled (synced);
-        dlyDiv->setAlpha (synced ? 1.0f : 0.4f);
-        dlyTime->setEnabled (! synced);
-        dlyTime->setAlpha (synced ? 0.4f : 1.0f);
+        dlyDiv->setVisible (synced);
+        dlyTime->setVisible (! synced);
     }
 }
 

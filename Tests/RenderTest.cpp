@@ -219,6 +219,54 @@ int main (int argc, char** argv)
             juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
         }
 
+        // Mod tabs: whichever of Mod 1/2/3 is shown, all three tab buttons stay visible on top of the panel (each is above
+        // every mod panel in the stacking order and the shown panel is the selected one)
+        {
+            juce::TextButton* tabs[3] {};
+            std::function<void (juce::Component&)> find = [&] (juce::Component& c)
+            {
+                for (auto* ch : c.getChildren())
+                {
+                    if (auto* b = dynamic_cast<juce::TextButton*> (ch))
+                        for (int k = 0; k < 3; ++k)
+                            if (b->getButtonText() == "Mod " + juce::String (k + 1)) tabs[k] = b;
+                    find (*ch);
+                }
+            };
+            find (*ed);
+            bool ok = tabs[0] != nullptr && tabs[1] != nullptr && tabs[2] != nullptr;
+            juce::String rep;
+            for (int k = 0; ok && k < 3; ++k)
+            {
+                tabs[k]->onClick();
+                auto* page = tabs[k]->getParentComponent();
+                int panelsAbove = 0, shown = 0;
+                for (int j = 0; j < 3; ++j)
+                {
+                    const int tabIndex = page->getIndexOfChildComponent (tabs[j]);
+                    for (auto* ch : page->getChildren())
+                        if (dynamic_cast<ModPanel*> (ch) != nullptr && ch->isVisible() && ch->getBounds().intersects (tabs[j]->getBounds())
+                            && page->getIndexOfChildComponent (ch) > tabIndex) ++panelsAbove;
+                }
+                for (auto* ch : page->getChildren())
+                    if (dynamic_cast<ModPanel*> (ch) != nullptr && ch->isVisible()) ++shown;
+                ok &= panelsAbove == 0 && shown == 1 && tabs[k]->getToggleState() && tabs[0]->isVisible() && tabs[1]->isVisible() && tabs[2]->isVisible();
+                rep << "Mod " << (k + 1) << ": " << panelsAbove << " tabs covered; ";
+            }
+            std::cout << (ok ? "ok   " : "FAIL ") << "Mod tabs stay on top: " << rep << "\n";
+            if (tabs[2] != nullptr)
+            {
+                auto* page = tabs[2]->getParentComponent();
+                for (size_t j = 0; j < pages.size(); ++j) pages[j]->setVisible (pages[j] == page);
+                auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+                juce::File f = juce::File (argv[2]).getChildFile ("mod3_tab.png");
+                f.deleteFile();
+                juce::FileOutputStream os (f);
+                juce::PNGImageFormat().writeImageToStream (img, os);
+                tabs[0]->onClick();
+            }
+        }
+
         // Coarse knob detents: drag a coarse knob from -48 to +48 one pixel at a time. Every semitone must be reachable,
         // each octave must hold for about 18 pixels, and grabbing the knob at a value
         // next to an octave must not jump.
@@ -2971,6 +3019,70 @@ int main (int argc, char** argv)
         std::cout << (ok ? "ok   " : "FAIL ") << "Ping-pong delay: first right echo vs first left " << juce::String (firstLR, 2) << " dB, right vs left overall "
                   << juce::String (overall, 2) << " dB, round trip " << juce::String (roundTrip, 1) << " dB (feedback 0.5 squared = -12.0), alternating "
                   << (alternate ? "yes" : "no") << "\n";
+    }
+
+    // Synced delay times run longest to shortest (a knob); saves from before that order keep their time, new saves
+    // round-trip, and factory presets keep the times they were voiced with (Morning Haze: 1/4 D, Skank Chords: 1/8 D)
+    {
+        bool ok = P::dlyDivNames.size() == 8;
+        for (int i = 1; i < 8; ++i) ok &= P::dlyDivBeats[i] < P::dlyDivBeats[i - 1];
+        const float oldBeats[] { 2.0f, 1.0f, 1.5f, 0.5f, 0.75f, 0.25f, 2.0f / 3.0f, 1.0f / 3.0f };   // the old order
+        auto qp = std::make_unique<ElukkaAudioProcessor>(), q2 = std::make_unique<ElukkaAudioProcessor>();
+        juce::String rep;
+        for (int old = 0; old < 8; ++old)
+        {
+            auto st = qp->saveState();
+            st.removeProperty ("dlyDivs", nullptr);
+            st.getChildWithProperty ("id", "dly_div").setProperty ("value", (float) old, nullptr);
+            q2->loadState (st);
+            const int now = (int) q2->apvts.getRawParameterValue ("dly_div")->load();
+            ok &= std::abs (P::dlyDivBeats[now] - oldBeats[old]) < 1.0e-6f;
+            rep << P::dlyDivNames[now] << " ";
+        }
+        setP (*qp, "dly_div", 6.0f);   // 1/8 T, saved in the new order
+        q2->loadState (qp->saveState());
+        ok &= (int) q2->apvts.getRawParameterValue ("dly_div")->load() == 6;
+        auto presetDiv = [&] (const char* name)
+        {
+            auto& pm = q2->presets;
+            for (int i = 0; i < (int) pm.entries.size(); ++i)
+                if (pm.entries[(size_t) i].name == name) pm.load (i);
+            return P::dlyDivNames[(int) q2->apvts.getRawParameterValue ("dly_div")->load()];
+        };
+        const auto haze = presetDiv ("Morning Haze"), skank = presetDiv ("Skank Chords");
+        ok &= haze == "1/4 D" && skank == "1/8 D";
+        if (! ok) ++failures;
+        std::cout << (ok ? "ok   " : "FAIL ") << "Delay synced times sorted: old saves read as " << rep.trim() << "; new saves round-trip; presets "
+                  << haze << ", " << skank << "\n";
+    }
+
+    // Delay synced time can be modulated: at 1/2 (1 s at 120 BPM) the first echo of a short blip arrives after 1 s;
+    // Macro 1 -> Delay Synced Time at full amount moves it to 1/16 (0.125 s); half the macro to about the middle (1/4 T)
+    {
+        auto echoAt = [&] (float macro)
+        {
+            auto qp = std::make_unique<ElukkaAudioProcessor>();
+            auto& q = *qp;
+            FakePlayHead fph; fph.playing = false; fph.bpm = 120.0;
+            q.setPlayHead (&fph);
+            q.setPlayConfigDetails (0, 2, sr, block);
+            setP (q, "o1_wave", (float) P::WSine); setP (q, "o1_level", 0.5f); setP (q, "master", 0.0f);
+            setP (q, "ampA", 0.001f); setP (q, "ampD", 0.01f); setP (q, "ampS", 0.0f); setP (q, "ampR", 0.01f);
+            setP (q, "dly_on", 1.0f); setP (q, "dly_sync", 1.0f); setP (q, "dly_div", 0.0f); setP (q, "dly_mix", 1.0f); setP (q, "dly_fb", 0.0f);
+            setP (q, "dly_pp", 0.0f);
+            setP (q, "mx1_src", (float) P::SrcMacro1); setP (q, "mx1_dst", (float) P::DstDlyDiv); setP (q, "mx1_amt", 1.0f); setP (q, "macro1", macro);
+            auto out = renderNotes (q, { 72 }, 1.5);
+            q.setPlayHead (nullptr);
+            int at = -1;   // first sample of the echo (the dry blip is not in the fully wet output)
+            for (int i = 0; i < out.getNumSamples() && at < 0; ++i) if (std::abs (out.getSample (0, i)) > 0.01f) at = i;
+            return at < 0 ? -1.0f : (float) at / (float) sr;
+        };
+        const float plain = echoAt (0.0f), full = echoAt (1.0f), half = echoAt (0.5f);
+        const bool ok = std::abs (plain - 1.0f) < 0.02f && std::abs (full - 0.125f) < 0.02f && std::abs (half - 1.0f / 3.0f) < 0.02f
+                        && P::destForParam ("dly_div") == P::DstDlyDiv;
+        if (! ok) ++failures;
+        std::cout << (ok ? "ok   " : "FAIL ") << "Delay synced time modulated: first echo at " << juce::String (plain, 3) << " s (1/2), with Macro 1 at full "
+                  << juce::String (full, 3) << " s (1/16), at half " << juce::String (half, 3) << " s (1/4 T)\n";
     }
 
     // Mod 3: a third mod unit like Mod 1/2. A square LFO at 4 Hz on Osc 1 Level (per voice) and on Master (global) makes

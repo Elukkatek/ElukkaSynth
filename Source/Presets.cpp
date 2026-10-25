@@ -26,7 +26,7 @@ enum { Sine, Tri, Saw, Sqr, Pulse, Noise };
 enum { L_LFO, L_SH, L_ENV };
 enum { ShSine, ShTri, ShSawDown, ShSawUp, ShSquare, ShDecay, ShAD, ShSteps, ShPluck };
 enum { D4Bars, D2Bars, D1Bar, D2, D4, D8, D16, D32, D4T, D8T, D16T, D4D, D8D };      // mod sync divisions
-enum { Dly2, Dly4, Dly4D, Dly8, Dly8D, Dly16, Dly4T, Dly8T };                           // delay divisions
+enum { Dly2, Dly4D, Dly4, Dly8D, Dly4T, Dly8, Dly8T, Dly16 };                           // delay divisions (P::dlyDivNames)
 enum { R8, R16, R32, R8T, R16T };                                                       // sequencer rates
 
 FP make (const juce::String& name, const juce::String& cat)

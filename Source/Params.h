@@ -43,8 +43,12 @@ inline const juce::StringArray distTypes   { "Soft", "Hard", "Fold", "Sine" };
 inline const juce::StringArray seqRates    { "1/8", "1/16", "1/32", "1/8 T", "1/16 T" };
 inline const float seqRateBeats[]          { 0.5f, 0.25f, 0.125f, 1.0f / 3.0f, 1.0f / 6.0f };
 
-inline const juce::StringArray dlyDivNames { "1/2", "1/4", "1/4 D", "1/8", "1/8 D", "1/16", "1/4 T", "1/8 T" };
-inline const float dlyDivBeats[]           { 2.0f, 1.0f, 1.5f, 0.5f, 0.75f, 0.25f, 2.0f / 3.0f, 1.0f / 3.0f };
+// Synced delay times, longest to shortest (shown on a knob). Saves from before this order are remapped on load
+// (dlyDivFromOld; the state property "dlyDivs" marks the new order).
+inline const juce::StringArray dlyDivNames { "1/2", "1/4 D", "1/4", "1/8 D", "1/4 T", "1/8", "1/8 T", "1/16" };
+inline const float dlyDivBeats[]           { 2.0f, 1.5f, 1.0f, 0.75f, 2.0f / 3.0f, 0.5f, 1.0f / 3.0f, 0.25f };
+// the old order was 1/2, 1/4, 1/4 D, 1/8, 1/8 D, 1/16, 1/4 T, 1/8 T
+inline int dlyDivFromOld (int old) { static const int map[] { 0, 2, 1, 5, 3, 7, 4, 6 }; return map[juce::jlimit (0, 7, old)]; }
 
 // Modulation sources
 inline const juce::StringArray modSources { "None", "Mod 1", "Mod 2", "Amp Env", "Velocity", "Mod Wheel",
@@ -98,6 +102,7 @@ enum Dst
     DstRsGate,
     DstFxfCutoff, DstFxfRes, DstFxfDrive,
     DstM3Rate, DstM3Start, DstM3Smooth, DstM3SyncRate,
+    DstDlyDiv,
     NumDst
 };
 // each mod unit's own destinations
@@ -151,6 +156,7 @@ inline const DestInfo dests[NumDst] =
     { "FX Filter Cutoff", "fxf_cutoff", false }, { "FX Filter Resonance", "fxf_res", false }, { "FX Filter Drive", "fxf_drive", false },
     { "Mod 3 Rate", "m3_rate", true }, { "Mod 3 Start", "m3_start", true }, { "Mod 3 Smooth", "m3_smooth", true },
     { "Mod 3 Sync Rate", "m3_syncRate", true },
+    { "Delay Synced Time", "dly_div", false },
 };
 
 // Matrix destination for a parameter ID, or DstNone if it cannot be modulated.
@@ -360,7 +366,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     addF ("dly_hp", "Delay High Pass", skewed (20.0f, 5000.0f, 300.0f), 20.0f, "Hz");
 
     addB ("dly_on", "Delay On", false);
-    addC ("dly_div", "Delay Time", dlyDivNames, 4);
+    addC ("dly_div", "Delay Synced Time", dlyDivNames, 3);   // 1/8 D
     addF ("dly_fb", "Delay Feedback", { 0.0f, 0.95f }, 0.4f);
     addF ("dly_mix", "Delay Mix", { 0.0f, 1.0f }, 0.25f);
     addB ("dly_pp", "Delay Ping-Pong", true);
