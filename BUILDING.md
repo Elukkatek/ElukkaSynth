@@ -38,7 +38,9 @@ cmake --build build --target ElukkaSynth_VST3 ElukkaTest --parallel
 ./build/ElukkaTest_artefacts/Release/ElukkaTest       # needs an X display; use xvfb-run headless
 ```
 
-Result: `build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3/` (copy it to `~/.vst3/`).
+The VST3 is copied into `~/.vst3` after building (turn off with
+`-DELUKKA_COPY_PLUGIN_AFTER_BUILD=OFF`). The build copy is also available at
+`build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3/`.
 The Linux build enables JUCE's MP3 decoder (`JUCE_USE_MP3AUDIOFORMAT=1`) because, unlike macOS and
 Windows, Linux has no system codec JUCE can use.
 
@@ -51,18 +53,12 @@ cmake -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release --target ElukkaSynth_VST3 ElukkaTest --parallel
 ```
 
-Install the built plugin into the system VST3 folder. Run this from the repo root in PowerShell
-**as Administrator** (the target folder is under `Program Files`):
-
-```powershell
-Copy-Item -Recurse -Force "build\ElukkaSynth_artefacts\Release\VST3\ElukkaSynth.vst3" "C:\Program Files\Common Files\VST3\"
-```
-
-Result: the bundle is installed as `C:\Program Files\Common Files\VST3\ElukkaSynth.vst3\`, and the
-build copy remains at `build\ElukkaSynth_artefacts\Release\VST3\ElukkaSynth.vst3\`. To run the
-offline tests, use `build\ElukkaTest_artefacts\Release\ElukkaTest.exe`. The C++ runtime is linked
-statically, so testers do not need the VC++ redistributable. Plugin copying after build is off by
-default on Windows and Linux.
+Run the build from an Administrator PowerShell. The VST3 is copied automatically into the standard
+system VST3 folder `C:\Program Files\Common Files\VST3` after building. Turn this off with
+`-DELUKKA_COPY_PLUGIN_AFTER_BUILD=OFF`. The build copy remains at
+`build\ElukkaSynth_artefacts\Release\VST3\ElukkaSynth.vst3\`. To run the offline tests, use
+`build\ElukkaTest_artefacts\Release\ElukkaTest.exe`. The C++ runtime is linked statically, so
+testers do not need the VC++ redistributable.
 
 ## Packaging a beta ZIP
 
