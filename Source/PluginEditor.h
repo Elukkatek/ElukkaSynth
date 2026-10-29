@@ -12,10 +12,6 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
     void mouseDown (const juce::MouseEvent&) override;
-    void mouseMove (const juce::MouseEvent&) override;
-    void visibilityChanged() override;
-    void focusGained (FocusChangeType) override;
-    void focusLost (FocusChangeType) override;
 
     static constexpr int baseWidth = 1140, baseHeight = 790;
 
@@ -26,7 +22,6 @@ private:
     void updatePresetButton();
     void showPresetMenu();
     void stepPreset (int delta);
-    void holdKeyboardFocus();
     void savePresetDialog();
     void deletePresetDialog();
     static juce::Image makeLogo();
@@ -63,7 +58,5 @@ private:
     Knob macro1, macro2, master;
 
     int lastUiVersion = -1;
-    bool wantsKeyboard = false;   // keep the keyboard until the user clicks outside the plugin
-    bool presetMenuOpen = false;
     juce::uint32 lastUndoTime = 0;   // ignore key auto-repeat so holding Ctrl+Z does not skip steps
 };

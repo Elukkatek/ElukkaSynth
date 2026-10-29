@@ -16,8 +16,8 @@ ElukkaAudioProcessorEditor::ElukkaAudioProcessorEditor (ElukkaAudioProcessor& p)
     logoArea.onClick = [this] { showCredits(); };
     view.addAndMakeVisible (logoArea);
     setWantsKeyboardFocus (true);
-    // The plugin window's own component does not forward keys to the editor, so keep real keyboard
-    // focus here: then Ctrl+Z reaches the plugin instead of the host (needed in FL Studio).
+    // FL Studio takes the native keyboard focus back on every click, so every click inside the plugin
+    // has to take it again for Ctrl+Z to reach the plugin instead of the host.
     addMouseListener (this, true);
 
     const char* names[] { "SYNTH", "HARMONICS", "RESYNTH", "SEQUENCER", "FX", "MATRIX" };
@@ -39,7 +39,7 @@ ElukkaAudioProcessorEditor::ElukkaAudioProcessorEditor (ElukkaAudioProcessor& p)
 
     presetButton.onClick = [this] { showPresetMenu(); };
     presetButton.setTooltip ("Browse presets: hover a category to open it");
-    resetBtn.onClick = [this] { proc.presets.load (0); updatePresetButton(); holdKeyboardFocus(); };   // entry 0 is Init
+    resetBtn.onClick = [this] { proc.presets.load (0); updatePresetButton(); };   // entry 0 is Init
     resetBtn.setTooltip ("Reset to the Init preset");
     prevBtn.onClick = [this] { stepPreset (-1); };
     nextBtn.onClick = [this] { stepPreset (1); };
@@ -212,28 +212,18 @@ void ElukkaAudioProcessorEditor::showPresetMenu()
     }
 
     juce::Component::SafePointer<ElukkaAudioProcessorEditor> safe (this);
-    presetMenuOpen = true;
-    // Draw the menu inside the plugin window instead of spawning a native popup window:
-    // otherwise the plugin loses keyboard focus (and FL keeps it, so Ctrl+Z goes to FL).
+    // Draw the menu inside the plugin window instead of spawning a native popup window: clicks on a
+    // separate popup window would not reach this editor's mouse listener, so keyboard focus would
+    // stay with the host after picking a preset (and Ctrl+Z would go to the host).
     menu.showMenuAsync (juce::PopupMenu::Options()
                             .withTargetComponent (&presetButton)
                             .withParentComponent (this)
                             .withMinimumWidth (presetButton.getWidth()),
                         [safe] (int result)
                         {
-                            if (safe == nullptr) return;
-                            safe->presetMenuOpen = false;
-                            if (result <= 0) return;
+                            if (safe == nullptr || result <= 0) return;
                             safe->proc.presets.load (result - 1);
                             safe->updatePresetButton();
-                            safe->holdKeyboardFocus();
-                            // The popup may hand focus back to the host after this callback: take it again.
-                            juce::Component::SafePointer<ElukkaAudioProcessorEditor> delayed (safe.getComponent());
-                            juce::Timer::callAfterDelay (80, [delayed]
-                            {
-                                if (delayed != nullptr)
-                                    delayed->holdKeyboardFocus();
-                            });
                         });
 }
 
@@ -245,13 +235,6 @@ void ElukkaAudioProcessorEditor::stepPreset (int delta)
     const int pos = pm.currentIndex < 0 ? (delta > 0 ? 0 : n - 1) : (pm.currentIndex + delta + n) % n;
     pm.load (pos);
     updatePresetButton();
-    holdKeyboardFocus();
-}
-
-void ElukkaAudioProcessorEditor::holdKeyboardFocus()
-{
-    wantsKeyboard = true;
-    grabKeyboardFocus();
 }
 
 void ElukkaAudioProcessorEditor::savePresetDialog()
@@ -340,24 +323,6 @@ bool ElukkaAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
     return false;
 }
 
-void ElukkaAudioProcessorEditor::focusGained (FocusChangeType cause)
-{
-    juce::ignoreUnused (cause);
-    if (! presetMenuOpen)
-        wantsKeyboard = true;
-}
-
-void ElukkaAudioProcessorEditor::focusLost (FocusChangeType cause)
-{
-    // Release the keyboard only when the user actually clicked outside the plugin.
-    if (cause == juce::Component::focusChangedByMouseClick && ! presetMenuOpen)
-    {
-        const auto mouse = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt();
-        if (! getScreenBounds().contains (mouse))
-            wantsKeyboard = false;
-    }
-}
-
 void ElukkaAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
 {
     // Text fields need the focus themselves.
@@ -367,20 +332,6 @@ void ElukkaAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
         return;
 
     grabKeyboardFocus();
-    holdKeyboardFocus();
-}
-
-void ElukkaAudioProcessorEditor::mouseMove (const juce::MouseEvent& e)
-{
-    // The keyboard is held until the user clicks outside; keep it while working in the plugin.
-    if (e.mods.isAnyMouseButtonDown())
-        wantsKeyboard = true;
-}
-
-void ElukkaAudioProcessorEditor::visibilityChanged()
-{
-    if (isVisible())
-        holdKeyboardFocus();
 }
 
 void ElukkaAudioProcessorEditor::timerCallback()
@@ -391,21 +342,6 @@ void ElukkaAudioProcessorEditor::timerCallback()
    #endif
     // If the DAW undid/redid a preset load in its own history, show the matching preset name.
     proc.presets.syncNameWithHost();
-
-    // FL's wrapper tries to take the keyboard back. Keep it until the user clicks outside the plugin,
-    // like a normal focused window, so Ctrl+Z stays with the plugin while working in it.
-    auto* focusedNow = juce::Component::getCurrentlyFocusedComponent();
-    const bool focusIsOurs = focusedNow == this || (focusedNow != nullptr && isParentOf (focusedNow));
-    const bool editingText = focusedNow != nullptr
-        && (dynamic_cast<juce::TextEditor*> (focusedNow) != nullptr
-            || focusedNow->findParentComponentOfClass<juce::TextEditor>() != nullptr);
-    const bool modalOpen = juce::Component::getCurrentlyModalComponent() != nullptr;
-
-    if (wantsKeyboard && ! presetMenuOpen && ! modalOpen && ! editingText)
-    {
-        if (isShowing() && ! focusIsOurs)
-            grabKeyboardFocus();
-    }
 
     const int v = proc.uiVersion.load();
     if (v != lastUiVersion)
