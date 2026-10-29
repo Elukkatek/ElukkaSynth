@@ -13,23 +13,53 @@ PresetManager::~PresetManager()
 
 void PresetManager::attachToParameters()
 {
-    for (auto* param : proc.getParameters())
-        param->addListener (this);
+    const auto& params = proc.getParameters();
+    numTrackedParams = params.size();
+    hostMoved = std::make_unique<std::atomic<bool>[]> ((size_t) numTrackedParams);
+    paramIds.assign ((size_t) numTrackedParams, juce::String());
+
+    for (int i = 0; i < numTrackedParams; ++i)
+    {
+        hostMoved[(size_t) i].store (false);
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (params[i]))
+            paramIds[(size_t) i] = ranged->getParameterID();
+        params[i]->addListener (this);
+    }
 }
 
 void PresetManager::detachFromParameters()
 {
     for (auto* param : proc.getParameters())
         param->removeListener (this);
+
+    hostMoved.reset();
+    paramIds.clear();
+    numTrackedParams = 0;
 }
 
-void PresetManager::parameterValueChanged (int, float)
+juce::RangedAudioParameter* PresetManager::getParam (int index) const
+{
+    const auto& params = proc.getParameters();
+    return index >= 0 && index < params.size()
+        ? dynamic_cast<juce::RangedAudioParameter*> (params[index])
+        : nullptr;
+}
+
+void PresetManager::parameterValueChanged (int parameterIndex, float)
 {
     if (juce::MessageManager::existsAndIsCurrentThread())
+    {
         ++hostChangeBurst;
+        return;
+    }
+
+    // The host moved a parameter (automation playback, the DAW's own undo, a project load). That is not
+    // an edit the user can undo, so remember it: commitUnrecordedChanges() folds it into the checkpoint.
+    if (hostMoved != nullptr && parameterIndex >= 0 && parameterIndex < numTrackedParams)
+        hostMoved[(size_t) parameterIndex].store (true);
 }
 
-void PresetManager::parameterGestureChanged (int, bool gestureIsStarting)
+void PresetManager::parameterGestureChanged (int parameterIndex, bool gestureIsStarting)
 {
     if (! juce::MessageManager::existsAndIsCurrentThread())
         return;
@@ -41,12 +71,24 @@ void PresetManager::parameterGestureChanged (int, bool gestureIsStarting)
     {
         // Seal anything edited before this gesture (mod shapes, pattern grid, ...) as its own step.
         if (gestureDepth++ == 0)
+        {
             commitUnrecordedChanges();
+            gestureBefore.clear();
+        }
+
+        // The value the parameter had before the gesture: what undo puts back when the gesture ends.
+        if (auto* param = getParam (parameterIndex))
+        {
+            const bool alreadyTracked = std::any_of (gestureBefore.begin(), gestureBefore.end(),
+                                                     [parameterIndex] (const auto& e) { return e.first == parameterIndex; });
+            if (! alreadyTracked)
+                gestureBefore.push_back ({ parameterIndex, param->convertFrom0to1 (param->getValue()) });
+        }
     }
     else if (gestureDepth > 0 && --gestureDepth == 0)
     {
-        // The whole gesture is one step, so each knob move undoes on its own.
-        commitUnrecordedChanges();
+        // Only the parameters this gesture touched are a step (not everything automation moved meanwhile).
+        commitGestureChanges();
     }
 }
 
@@ -1109,6 +1151,32 @@ private:
     bool firstPerform = false;
 };
 
+class PresetManager::ParamAction final : public juce::UndoableAction
+{
+public:
+    ParamAction (PresetManager& managerIn, std::vector<ParamChange> changesIn)
+        : manager (managerIn), changes (std::move (changesIn)) {}
+
+    bool perform() override
+    {
+        // The values are already at `after` when the action is recorded, so only a redo has to apply them.
+        if (! firstPerform)
+        {
+            firstPerform = true;
+            return true;
+        }
+        return manager.applyParamChanges (changes, false);
+    }
+
+    bool undo() override { return manager.applyParamChanges (changes, true); }
+    int getSizeInUnits() override { return 1; }
+
+private:
+    PresetManager& manager;
+    std::vector<ParamChange> changes;
+    bool firstPerform = false;
+};
+
 namespace
 {
 // A VST3 group edit: the DAW records every parameter change made inside it as one undo step.
@@ -1235,6 +1303,32 @@ bool PresetManager::restoreSnapshot (const Snapshot& snapshot)
     return true;
 }
 
+bool PresetManager::applyParamChanges (const std::vector<ParamChange>& changes, bool useBefore)
+{
+    if (changes.empty()) return true;
+
+    HostEditGroup group (proc);
+
+    applyingState = true;
+    if (group.active)
+        for (auto& change : changes)
+            if (auto* param = getParam (change.index))
+                param->beginChangeGesture();
+
+    for (auto& change : changes)
+        if (auto* param = getParam (change.index))
+            param->setValueNotifyingHost (param->convertTo0to1 (useBefore ? change.before : change.after));
+
+    if (group.active)
+        for (auto& change : changes)
+            if (auto* param = getParam (change.index))
+                param->endChangeGesture();
+
+    applyingState = false;
+    proc.bumpUiVersion();
+    return true;
+}
+
 bool PresetManager::snapshotsEqual (const Snapshot& a, const Snapshot& b)
 {
     return statesEqual (a.state, b.state)
@@ -1294,7 +1388,35 @@ void PresetManager::commitUnrecordedChanges()
         return;
     }
 
-    if (snapshotsEqual (checkpoint, current)) return;
+    // Values the host moved (automation playback, the DAW's own undo, a project load) are not user edits.
+    // Compare against a copy where those parameters still have the checkpoint's value, so they never
+    // become a history step; undoing an edit must not freeze such a parameter at an old position.
+    std::vector<int> moved;
+    for (int i = 0; i < numTrackedParams; ++i)
+        if (hostMoved != nullptr && hostMoved[(size_t) i].exchange (false))
+            moved.push_back (i);
+
+    auto comparable = current;
+    if (! moved.empty())
+    {
+        comparable.state = current.state.createCopy();
+        for (int index : moved)
+        {
+            const auto& id = paramIds[(size_t) index];
+            if (id.isEmpty()) continue;
+
+            const auto source = checkpoint.state.getChildWithProperty ("id", id);
+            auto target = comparable.state.getChildWithProperty ("id", id);
+            if (source.isValid() && target.isValid())
+                target.setProperty ("value", source["value"], nullptr);
+        }
+    }
+
+    if (snapshotsEqual (checkpoint, comparable))
+    {
+        checkpoint = current;   // nothing the user did: keep the host's values as the new baseline
+        return;
+    }
 
     history.beginNewTransaction();
     if (history.perform (new SnapshotAction (*this, checkpoint, current)))
@@ -1304,8 +1426,38 @@ void PresetManager::commitUnrecordedChanges()
     }
 }
 
+void PresetManager::commitGestureChanges()
+{
+    std::vector<ParamChange> changes;
+
+    for (auto& [index, before] : gestureBefore)
+        if (auto* param = getParam (index))
+        {
+            const float after = param->convertFrom0to1 (param->getValue());
+            if (std::abs (after - before) > 1.0e-5f * juce::jmax (1.0f, std::abs (before)))
+                changes.push_back ({ index, before, after });
+        }
+
+    gestureBefore.clear();
+    if (changes.empty()) return;
+
+    history.beginNewTransaction();
+    if (history.perform (new ParamAction (*this, std::move (changes))))
+    {
+        checkpoint = captureSnapshot();
+        rememberState (checkpoint);
+    }
+}
+
 bool PresetManager::undo()
 {
+    // Ctrl+Z pressed while a knob is still held: close that edit first so it is not recorded twice.
+    if (gestureDepth > 0)
+    {
+        gestureDepth = 0;
+        commitGestureChanges();
+    }
+
     commitUnrecordedChanges();
     const bool changed = history.undo();
     if (changed)
@@ -1318,6 +1470,12 @@ bool PresetManager::undo()
 
 bool PresetManager::redo()
 {
+    if (gestureDepth > 0)
+    {
+        gestureDepth = 0;
+        commitGestureChanges();
+    }
+
     commitUnrecordedChanges();
     const bool changed = history.redo();
     if (changed)
@@ -1344,7 +1502,11 @@ void PresetManager::clearHistory()
     checkpoint = captureSnapshot();
     hasCheckpoint = true;
     gestureDepth = 0;
+    gestureBefore.clear();
     hostChangeBurst = 0;
+    for (int i = 0; i < numTrackedParams; ++i)
+        if (hostMoved != nullptr)
+            hostMoved[(size_t) i].store (false);
     knownStates.clear();
     rememberState (checkpoint);
 }

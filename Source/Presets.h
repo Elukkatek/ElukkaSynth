@@ -71,16 +71,24 @@ private:
 
     class HistoryAction;
     class SnapshotAction;
+    class ParamAction;
+
+    // One user edit of one parameter. Knob gestures are recorded as these instead of whole states, so
+    // undo only writes back the parameters the user touched (host automation keeps its values).
+    struct ParamChange { int index = 0; float before = 0.0f, after = 0.0f; };
 
     void applyFactory (const FactoryPreset& p);
     bool applyPreset (const Entry& entry);
     bool applyPattern (const PatternEntry& entry);
     Snapshot captureSnapshot();
     bool restoreSnapshot (const Snapshot& snapshot);
+    bool applyParamChanges (const std::vector<ParamChange>& changes, bool useBefore);
+    juce::RangedAudioParameter* getParam (int index) const;
     static bool snapshotsEqual (const Snapshot&, const Snapshot&);
     static bool statesEqual (const juce::ValueTree&, const juce::ValueTree&);
     static bool parameterStatesEqual (const juce::ValueTree&, const juce::ValueTree&);
     void commitUnrecordedChanges();
+    void commitGestureChanges();
     void rememberState (const Snapshot&);
     void applyNameFrom (const Snapshot&);
 
@@ -92,6 +100,11 @@ private:
     int gestureDepth = 0;
     bool applyingState = false;        // preset load / undo in progress: gestures are not history steps
     int hostChangeBurst = 0;           // parameter changes since the editor last looked
+
+    std::vector<juce::String> paramIds;               // getParameters() order, for state comparisons
+    std::unique_ptr<std::atomic<bool>[]> hostMoved;   // parameter changed off the message thread = host/automation
+    int numTrackedParams = 0;
+    std::vector<std::pair<int, float>> gestureBefore; // denormalised value each parameter had when its gesture started
 
     std::vector<Snapshot> knownStates; // recent named states, for keeping the name in sync with the DAW's undo
 

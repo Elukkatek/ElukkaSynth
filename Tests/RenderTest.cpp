@@ -1,6 +1,7 @@
 // Offline test: renders every factory preset and checks the output for NaNs, silence and
 // clipping, measures render speed, and checks tempo detection on a synthetic loop.
 #include <JuceHeader.h>
+#include <thread>
 #include "../Source/PluginEditor.h"
 #include "BinaryData.h"
 #include "ClickProbe.h"
@@ -1277,6 +1278,38 @@ int main (int argc, char** argv)
             const bool gesturesOk = undoSecond && undoFirst && redoFirst && redoSecond;
             if (! gesturesOk) ++failures;
             std::cout << (gesturesOk ? "ok   " : "FAIL ") << "Two knob gestures are two undo steps, in order\n";
+        }
+
+        // A parameter the host moved (automation playback, DAW undo) is not an undo step, and undoing a
+        // knob edit must not write such a parameter back to an old value.
+        {
+            ElukkaAudioProcessor g;
+            g.presets.clearHistory();
+            auto* edited = g.apvts.getParameter ("o1_level");
+            auto* automated = g.apvts.getParameter ("o2_level");
+            auto denorm = [] (juce::RangedAudioParameter* p) { return p->convertFrom0to1 (p->getValue()); };
+
+            edited->beginChangeGesture();
+            edited->setValueNotifyingHost (edited->convertTo0to1 (0.35f));
+            edited->endChangeGesture();
+
+            // Changed off the message thread, like automation during processBlock().
+            std::thread host ([automated] { automated->setValueNotifyingHost (automated->convertTo0to1 (0.9f)); });
+            host.join();
+
+            const bool oneStep = g.presets.undo();
+            const bool editUndone = std::abs (denorm (edited) - 0.8f) < 1.0e-4f;
+            const bool automationKept = std::abs (denorm (automated) - 0.9f) < 1.0e-4f;
+            const bool noPhantomStep = ! g.presets.canUndo();
+
+            const bool redoOk = g.presets.redo()
+                && std::abs (denorm (edited) - 0.35f) < 1.0e-4f
+                && std::abs (denorm (automated) - 0.9f) < 1.0e-4f;
+
+            const bool automationOk = oneStep && editUndone && automationKept && noPhantomStep && redoOk;
+            if (! automationOk) ++failures;
+            std::cout << (automationOk ? "ok   " : "FAIL ")
+                      << "Host/automation parameter changes are not undo steps and survive undo/redo\n";
         }
 
         // An FX reorder changes no parameter, but it is still an undo step of its own.
