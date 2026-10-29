@@ -181,6 +181,35 @@ const std::vector<SeqPattern>& SeqPattern::factory()
     return list;
 }
 
+const std::vector<SeqPattern::Scale>& SeqPattern::scales()
+{
+    static const std::vector<Scale> list
+    {
+        { "Western",            "Major",                       { 0, 2, 4, 5, 7, 9, 11 } },
+        { "Western",            "Minor",                       { 0, 2, 3, 5, 7, 8, 10 } },
+        { "Western",            "Harmonic Minor",              { 0, 2, 3, 5, 7, 8, 11 } },
+        { "Western",            "Melodic Minor",               { 0, 2, 3, 5, 7, 9, 11 } },
+        { "Modes",              "Dorian",                      { 0, 2, 3, 5, 7, 9, 10 } },
+        { "Modes",              "Phrygian",                    { 0, 1, 3, 5, 7, 8, 10 } },
+        { "Modes",              "Lydian",                      { 0, 2, 4, 6, 7, 9, 11 } },
+        { "Modes",              "Mixolydian",                  { 0, 2, 4, 5, 7, 9, 10 } },
+        { "Modes",              "Locrian",                     { 0, 1, 3, 5, 6, 8, 10 } },
+        { "Pentatonic & Blues", "Minor Pentatonic",            { 0, 3, 5, 7, 10 } },
+        { "Pentatonic & Blues", "Major Pentatonic",            { 0, 2, 4, 7, 9 } },
+        { "Pentatonic & Blues", "Blues",                       { 0, 3, 5, 6, 7, 10 } },
+        { "World",              "Arabic (Double Harmonic)",    { 0, 1, 4, 5, 7, 8, 11 } },
+        { "World",              "Hijaz (Phrygian Dominant)",   { 0, 1, 4, 5, 7, 8, 10 } },
+        { "World",              "Hungarian Minor",             { 0, 2, 3, 6, 7, 8, 11 } },
+        { "World",              "Persian",                     { 0, 1, 4, 5, 6, 8, 11 } },
+        { "World",              "Japanese (In)",               { 0, 1, 5, 7, 8 } },
+        { "World",              "Hirajoshi",                   { 0, 2, 3, 7, 8 } },
+        { "Symmetric",          "Whole Tone",                  { 0, 2, 4, 6, 8, 10 } },
+        { "Symmetric",          "Diminished (Half-Whole)",     { 0, 1, 3, 4, 6, 7, 9, 10 } },
+        { "Symmetric",          "Chromatic",                   { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 } },
+    };
+    return list;
+}
+
 int SeqPattern::initIndex()
 {
     static const int index = []

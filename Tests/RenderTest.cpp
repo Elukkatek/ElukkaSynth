@@ -1701,6 +1701,38 @@ int main (int argc, char** argv)
             inScale &= std::abs (e2.semis) <= 12 && std::find (minor.begin(), minor.end(), ((e2.semis % 12) + 12) % 12) != minor.end();
             varied |= e2.semis != q->pattern.pitches[0].semis;
         }
+        // every scale in the menu: pitches only from that scale, the root among them
+        juce::ComboBox* scaleBox = nullptr;
+        juce::Button* randomizeBtn = nullptr;
+        for (auto* c : page.getChildren())
+        {
+            if (auto* cb = dynamic_cast<juce::ComboBox*> (c); cb != nullptr && cb->indexOfItemId (1) >= 0 && cb->getItemText (0) == "Major") scaleBox = cb;
+            if (auto* b = dynamic_cast<juce::TextButton*> (c); b != nullptr && b->getButtonText() == "Randomize Pitch") randomizeBtn = b;
+        }
+        const auto& scales = SeqPattern::scales();
+        bool scalesOk = scaleBox != nullptr && randomizeBtn != nullptr && scaleBox->getNumItems() == (int) scales.size() && scales.size() >= 20;
+        int scalesChecked = 0;
+        for (int i = 0; scalesOk && i < (int) scales.size(); ++i)
+        {
+            const auto& notes = scales[(size_t) i].notes;
+            scalesOk &= notes.front() == 0 && std::is_sorted (notes.begin(), notes.end()) && notes.back() < 12;
+            scaleBox->setSelectedId (i + 1, juce::dontSendNotification);
+            bool rootSeen = false;
+            for (int rep = 0; rep < 4; ++rep)   // a few rolls: the root is weighted, so it shows up
+            {
+                randomizeBtn->onClick();
+                for (auto& e2 : q->pattern.pitches)
+                {
+                    const int pc = ((e2.semis % 12) + 12) % 12;
+                    scalesOk &= std::find (notes.begin(), notes.end(), pc) != notes.end();
+                    rootSeen |= pc == 0;
+                }
+            }
+            scalesOk &= rootSeen && scaleBox->getText() == scales[(size_t) i].name;
+            ++scalesChecked;
+        }
+        std::cout << (scalesOk ? "ok   " : "FAIL ") << "Randomize scales: " << scalesChecked << " scales give only their own notes (Arabic, Melodic Minor, Hijaz ...)\n";
+        if (! scalesOk) ++failures;
         const bool ok = oldOk && roundOk && played == 48 + 31 && clicked && inScale && varied;
         if (! ok) ++failures;
         std::cout << (ok ? "ok   " : "FAIL ") << "Sequencer: old patterns convert (" << (oldOk ? "yes" : "no") << "), -29 survives saving ("
@@ -2591,7 +2623,8 @@ int main (int argc, char** argv)
         std::cout << (prismOk ? "ok   " : "FAIL ") << "Prism 100% around harmonic 8: fundamental " << juce::String (fundDb, 2) << " dB, harmonic 2 "
                   << juce::String (h2Db, 2) << " dB (outside the band), " << moved << " of harmonics 6-11 moved off their place\n";
 
-        auto shim = sawNote ([&] (ElukkaAudioProcessor& q) { setP (q, "hm_shimmer", 100.0f); setP (q, "hm_shimmerRate", 2.0f); });
+        auto shim = sawNote ([&] (ElukkaAudioProcessor& q) { setP (q, "hm_shimmer", 100.0f); setP (q, "hm_shimmerRate", 2.0f);
+                                                              q.seedRandom (1); });   // the drift must not change between runs
         const float shFund = juce::Decibels::gainToDecibels (exactBin (shim, f0) / exactBin (clean, f0));
         // the drift is random, so look at several harmonics: most must have left their exact pitch
         int drifting = 0;

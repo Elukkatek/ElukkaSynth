@@ -38,6 +38,10 @@ struct SeqPattern
                                 float density, float tieProb, float accentProb, float slideProb, float octaveProb);
 
     static const std::vector<SeqPattern>& factory();
+
+    // Scales for the pitch randomizer: semitones above the root (0..11, root first), grouped into menu sections
+    struct Scale { const char* section; const char* name; std::vector<int> notes; };
+    static const std::vector<Scale>& scales();
     static int initIndex();   // the plain "Init" pattern: 16 notes on the root
 };
 

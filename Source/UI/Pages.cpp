@@ -1175,8 +1175,16 @@ SeqPage::SeqPage (ElukkaAudioProcessor& p)
                                                               &length, &pitchCount, &startStep, &lengthLabel, &pitchLabel, &startLabel, &grid,
                                                               &randomize, &randomScale, &randomRange })
         addAndMakeVisible (c);
-    randomScale.addItemList ({ "Chromatic", "Minor", "Phrygian", "Locrian", "Major", "Pentatonic" }, 1);
-    randomScale.setSelectedId (2, juce::dontSendNotification);
+    {
+        const auto& scales = SeqPattern::scales();
+        juce::String section;
+        for (int i = 0; i < (int) scales.size(); ++i)
+        {
+            if (section != scales[(size_t) i].section) { section = scales[(size_t) i].section; randomScale.addSectionHeading (section); }
+            randomScale.addItem (scales[(size_t) i].name, i + 1);
+            if (juce::String (scales[(size_t) i].name) == "Minor") randomScale.setSelectedId (i + 1, juce::dontSendNotification);
+        }
+    }
     randomScale.setTooltip ("Scale the random pitches are taken from (relative to the key you hold)");
     for (int o = 1; o <= 3; ++o) randomRange.addItem (juce::String::fromUTF8 ("\xc2\xb1") + juce::String (o) + " oct", o);
     randomRange.setSelectedId (1, juce::dontSendNotification);
@@ -1250,10 +1258,8 @@ SeqPage::SeqPage (ElukkaAudioProcessor& p)
 
 void SeqPage::randomizePitch()
 {
-    static const std::vector<std::vector<int>> scales { { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 }, { 0, 2, 3, 5, 7, 8, 10 },
-                                                        { 0, 1, 3, 5, 7, 8, 10 }, { 0, 1, 3, 5, 6, 8, 10 },
-                                                        { 0, 2, 4, 5, 7, 9, 11 }, { 0, 3, 5, 7, 10 } };
-    const auto& scale = scales[(size_t) juce::jlimit (0, (int) scales.size() - 1, randomScale.getSelectedId() - 1)];
+    const auto& scales = SeqPattern::scales();
+    const auto& scale = scales[(size_t) juce::jlimit (0, (int) scales.size() - 1, randomScale.getSelectedId() - 1)].notes;
     const int span = 12 * juce::jlimit (1, 3, randomRange.getSelectedId());
     // every note of the scale within the range; the root counts triple and nearer octaves more, so lines stay grounded
     std::vector<std::pair<int, float>> choices;
