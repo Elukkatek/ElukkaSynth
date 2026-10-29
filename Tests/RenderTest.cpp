@@ -1279,6 +1279,31 @@ int main (int argc, char** argv)
             std::cout << (gesturesOk ? "ok   " : "FAIL ") << "Two knob gestures are two undo steps, in order\n";
         }
 
+        // An FX reorder changes no parameter, but it is still an undo step of its own.
+        {
+            ElukkaAudioProcessor g;
+            g.presets.clearHistory();
+
+            std::vector<int> before;
+            for (auto& f : g.fxOrder) before.push_back (f.load());
+
+            std::vector<int> reversed;
+            for (int i = 0; i < P::NumFx; ++i) reversed.push_back (before[(size_t) (P::NumFx - 1 - i)]);
+            for (int i = 0; i < P::NumFx; ++i) g.fxOrder[(size_t) i] = reversed[(size_t) i];
+
+            const bool undoOrder = g.presets.undo();
+            bool restored = true;
+            for (int i = 0; i < P::NumFx; ++i) restored &= g.fxOrder[(size_t) i].load() == before[(size_t) i];
+
+            const bool redoOrder = g.presets.redo();
+            bool redone = true;
+            for (int i = 0; i < P::NumFx; ++i) redone &= g.fxOrder[(size_t) i].load() == reversed[(size_t) i];
+
+            const bool fxUndoOk = undoOrder && restored && redoOrder && redone;
+            if (! fxUndoOk) ++failures;
+            std::cout << (fxUndoOk ? "ok   " : "FAIL ") << "FX order reorder is undoable and redoable\n";
+        }
+
         // FX order survives the plugin state
         const int custom[] { P::FxReverb, P::FxEq, P::FxFilter, P::FxOtt, P::FxDist, P::FxComb, P::FxDelay };
         for (int i = 0; i < P::NumFx; ++i) fp.fxOrder[(size_t) i] = custom[i];

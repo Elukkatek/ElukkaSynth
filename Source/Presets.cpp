@@ -1248,8 +1248,17 @@ bool PresetManager::snapshotsEqual (const Snapshot& a, const Snapshot& b)
 
 bool PresetManager::statesEqual (const juce::ValueTree& a, const juce::ValueTree& b)
 {
-    if (a.getType() != b.getType() || a.getNumChildren() != b.getNumChildren())
+    if (a.getType() != b.getType()
+        || a.getNumChildren() != b.getNumChildren()
+        || a.getNumProperties() != b.getNumProperties())
         return false;
+
+    // Some edits live on the root, not in a parameter child (the FX order is one): they are steps too.
+    for (int i = 0; i < a.getNumProperties(); ++i)
+    {
+        const auto name = a.getPropertyName (i);
+        if (! b.hasProperty (name) || a[name] != b[name]) return false;
+    }
 
     for (int i = 0; i < a.getNumChildren(); ++i)
     {
