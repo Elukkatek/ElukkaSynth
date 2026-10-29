@@ -49,12 +49,20 @@ Visual Studio 2022 with the "Desktop development with C++" workload and CMake 3.
 ```bat
 cmake -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release --target ElukkaSynth_VST3 ElukkaTest --parallel
-build\ElukkaTest_artefacts\Release\ElukkaTest.exe
 ```
 
-Result: `build\ElukkaSynth_artefacts\Release\VST3\ElukkaSynth.vst3\` (copy the folder to
-`C:\Program Files\Common Files\VST3\`). The C++ runtime is linked statically, so testers do not need
-the VC++ redistributable. Plugin copying after build is off by default on Windows and Linux.
+Install the built plugin into the system VST3 folder. Run this from the repo root in PowerShell
+**as Administrator** (the target folder is under `Program Files`):
+
+```powershell
+Copy-Item -Recurse -Force "build\ElukkaSynth_artefacts\Release\VST3\ElukkaSynth.vst3" "C:\Program Files\Common Files\VST3\"
+```
+
+Result: the bundle is installed as `C:\Program Files\Common Files\VST3\ElukkaSynth.vst3\`, and the
+build copy remains at `build\ElukkaSynth_artefacts\Release\VST3\ElukkaSynth.vst3\`. To run the
+offline tests, use `build\ElukkaTest_artefacts\Release\ElukkaTest.exe`. The C++ runtime is linked
+statically, so testers do not need the VC++ redistributable. Plugin copying after build is off by
+default on Windows and Linux.
 
 ## Packaging a beta ZIP
 
