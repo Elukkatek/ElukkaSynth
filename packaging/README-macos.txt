@@ -30,6 +30,7 @@ User presets and sequencer patterns are saved as plain files in
     ~/Documents/ElukkaSynth/Patterns/     (*.elukkaseq)
 Deleting a preset from the plugin moves the file to the Trash.
 
+
 Resynthesis file formats
 ------------------------
 Audio: WAV, AIFF, FLAC, OGG, MP3 (MP3 through macOS' built-in codecs).

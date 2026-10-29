@@ -15,7 +15,8 @@ Installation
 1. Unzip this archive.
 2. Copy the whole "ElukkaSynth.vst3" FOLDER (it is a bundle, not a single file) to:
        C:\Program Files\Common Files\VST3\
-   You may need to confirm an administrator prompt.
+   You may need to confirm an administrator prompt. A per-user alternative is:
+       %LOCALAPPDATA%\Programs\Common\VST3\
 3. Start your host and rescan plugins if it does not pick the synth up automatically.
    It appears as "ElukkaSynth" by "Elukka" under Instruments.
 
@@ -25,6 +26,8 @@ User presets and sequencer patterns are saved as plain files in
     Documents\ElukkaSynth\Presets\      (*.elukka)
     Documents\ElukkaSynth\Patterns\     (*.elukkaseq)
 Deleting a preset from the plugin moves the file to the Recycle Bin.
+After loading a preset or sequencer pattern, Ctrl+Z undoes it and Ctrl+Y (or Ctrl+Shift+Z)
+redoes it.
 
 Resynthesis file formats
 ------------------------
@@ -43,7 +46,7 @@ Known limitations (beta)
 Troubleshooting
 ---------------
 - Plugin not found: make sure you copied the ElukkaSynth.vst3 folder itself into
-  the VST3 folder (so that C:\Program Files\Common Files\VST3\ElukkaSynth.vst3\Contents\
+  the VST3 folder (so that `C:\Program Files\Common Files\VST3\ElukkaSynth.vst3\Contents\`
   exists), then rescan or clear the plugin cache in your host.
 - Host says the plugin failed to load / is blocklisted: remove it from the host's
   blocklist and rescan. If it keeps failing, tell us your Windows version and host.

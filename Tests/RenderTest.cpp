@@ -1184,6 +1184,101 @@ int main (int argc, char** argv)
                       << fresh.presets.patterns.front().name << ")\n";
         }
 
+        // Preset/pattern history: one load is one undoable action, including the resynth source.
+        {
+            ElukkaAudioProcessor q;
+            auto& pm = q.presets;
+            int imagePreset = -1;
+            for (int i = 0; i < (int) pm.entries.size(); ++i)
+                if (pm.entries[(size_t) i].name == "Rain On Glass") imagePreset = i;
+
+            pm.load (imagePreset);
+            const auto image = q.getResynth();
+            const auto loadedName = pm.currentName;
+            const auto loadedPattern = q.pattern.name;
+            const bool loaded = image != nullptr && loadedName == "Rain On Glass";
+
+            const bool undoOk = pm.undo() && q.getResynth() == nullptr && pm.currentName == "Init";
+            const bool redoOk = pm.redo() && q.getResynth() == image && pm.currentName == loadedName && q.pattern.name == loadedPattern;
+
+            const auto beforePattern = q.pattern.name;
+            pm.loadPattern (1);
+            const auto changedPattern = q.pattern.name;
+            const bool patternUndo = changedPattern != beforePattern && pm.undo() && q.pattern.name == beforePattern;
+            const bool patternRedo = pm.redo() && q.pattern.name == changedPattern;
+
+            // Edits made before opening a preset are one grouped history step before the preset load.
+            ElukkaAudioProcessor edited;
+            auto* editedLevel = edited.apvts.getParameter ("o1_level");
+            editedLevel->setValueNotifyingHost (editedLevel->convertTo0to1 (0.37f));
+            edited.pattern.startStep = 2;
+            edited.uiScale = 1.25f;
+            const auto editedState = edited.saveState (false);
+            edited.presets.load (imagePreset);
+            const bool undoAction = edited.presets.undo();
+            const bool undoState = edited.saveState (false).isEquivalentTo (editedState);
+            const bool undoScale = edited.uiScale == 1.25f;
+            const bool undoName = edited.presets.currentName == "Init";
+            const bool undoToEdited = undoAction && undoState && undoScale && undoName;
+            const bool redoPreset = edited.presets.redo()
+                && edited.presets.currentName == "Rain On Glass"
+                && edited.getResynth() != nullptr;
+
+            // A change after loading a preset is its own transaction before undo reaches the preset load.
+            ElukkaAudioProcessor afterLoad;
+            afterLoad.presets.load (imagePreset);
+            const auto presetState = afterLoad.saveState (false);
+            const auto presetName = afterLoad.presets.currentName;
+            auto* afterLoadLevel = afterLoad.apvts.getParameter ("o1_level");
+            afterLoadLevel->setValueNotifyingHost (afterLoadLevel->convertTo0to1 (0.21f));
+            const auto changedState = afterLoad.saveState (false);
+            const bool undoEdit = afterLoad.presets.undo()
+                && afterLoad.saveState (false).isEquivalentTo (presetState)
+                && afterLoad.presets.currentName == presetName
+                && afterLoad.getResynth() != nullptr;
+            const bool undoPreset = afterLoad.presets.undo()
+                && afterLoad.presets.currentName == "Init"
+                && afterLoad.getResynth() == nullptr;
+            const bool redoPresetAgain = afterLoad.presets.redo()
+                && afterLoad.saveState (false).isEquivalentTo (presetState);
+            const bool redoEdit = afterLoad.presets.redo()
+                && afterLoad.saveState (false).isEquivalentTo (changedState)
+                && afterLoad.presets.currentName == presetName;
+
+            const bool historyOk = loaded && undoOk && redoOk && patternUndo && patternRedo
+                && undoToEdited && redoPreset && undoEdit && undoPreset
+                && redoPresetAgain && redoEdit;
+            if (! historyOk) ++failures;
+            std::cout << (historyOk ? "ok   " : "FAIL ") << "Preset and pattern undo/redo history (including resynth source)\n";
+        }
+
+        // Each parameter gesture is its own undo step (a knob move does not clump with the next one).
+        {
+            ElukkaAudioProcessor g;
+            g.presets.clearHistory();
+            const auto initial = g.saveState (false);
+
+            auto* lvl1 = g.apvts.getParameter ("o1_level");
+            auto* lvl2 = g.apvts.getParameter ("o2_level");
+            lvl1->beginChangeGesture();
+            lvl1->setValueNotifyingHost (lvl1->convertTo0to1 (0.4f));
+            lvl1->endChangeGesture();
+            const auto afterFirst = g.saveState (false);
+
+            lvl2->beginChangeGesture();
+            lvl2->setValueNotifyingHost (lvl2->convertTo0to1 (0.6f));
+            lvl2->endChangeGesture();
+            const auto afterSecond = g.saveState (false);
+
+            const bool undoSecond = g.presets.undo() && g.saveState (false).isEquivalentTo (afterFirst);
+            const bool undoFirst = g.presets.undo() && g.saveState (false).isEquivalentTo (initial);
+            const bool redoFirst = g.presets.redo() && g.saveState (false).isEquivalentTo (afterFirst);
+            const bool redoSecond = g.presets.redo() && g.saveState (false).isEquivalentTo (afterSecond);
+            const bool gesturesOk = undoSecond && undoFirst && redoFirst && redoSecond;
+            if (! gesturesOk) ++failures;
+            std::cout << (gesturesOk ? "ok   " : "FAIL ") << "Two knob gestures are two undo steps, in order\n";
+        }
+
         // FX order survives the plugin state
         const int custom[] { P::FxReverb, P::FxEq, P::FxFilter, P::FxOtt, P::FxDist, P::FxComb, P::FxDelay };
         for (int i = 0; i < P::NumFx; ++i) fp.fxOrder[(size_t) i] = custom[i];

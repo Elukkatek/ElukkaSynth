@@ -31,7 +31,8 @@ juce_add_plugin(ElukkaSynth
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
-    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+    VST3_COPY_DIR "${ELUKKA_VST3_COPY_DIR}"
     COPY_PLUGIN_AFTER_BUILD ${ELUKKA_COPY_PLUGIN_AFTER_BUILD}
     PLUGIN_MANUFACTURER_CODE Elkk
     PLUGIN_CODE Elks
@@ -39,6 +40,10 @@ juce_add_plugin(ElukkaSynth
     FORMATS VST3)
 
 juce_generate_juce_header(ElukkaSynth)
+
+# Needed to talk to the host's VST3 IComponentHandler2 (grouped undo entries).
+target_include_directories(ElukkaSynth PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/modules/juce_audio_processors/format_types/VST3_SDK")
 
 juce_add_binary_data(ElukkaSynthData SOURCES Resources/logo.jpg)
 

@@ -35,6 +35,7 @@ User presets and sequencer patterns are saved as plain files in
 (If your Documents folder lives elsewhere per XDG settings, that folder is used.)
 Deleting a preset from the plugin moves the file to the freedesktop Trash.
 
+
 Resynthesis file formats
 ------------------------
 Audio: WAV, AIFF, FLAC, OGG, MP3 (MP3 via JUCE's built-in decoder).

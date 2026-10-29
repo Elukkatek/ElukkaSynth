@@ -1,6 +1,11 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+#if defined (JucePlugin_Build_VST3) && JucePlugin_Build_VST3
+ #include "pluginterfaces/base/funknown.h"
+ #include "pluginterfaces/vst/ivsteditcontroller.h"
+#endif
+
 ElukkaAudioProcessor::ElukkaAudioProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "ElukkaSynth", P::createLayout()),
@@ -14,6 +19,55 @@ ElukkaAudioProcessor::ElukkaAudioProcessor()
     work.assign ((size_t) maxTableSize * 2 + 16, 0.0f);
     presets.refresh();
     presets.load (0);   // start on the Init preset
+    presets.clearHistory();
+}
+
+ElukkaAudioProcessor::~ElukkaAudioProcessor()
+{
+   #if defined (JucePlugin_Build_VST3) && JucePlugin_Build_VST3
+    if (auto* handler = static_cast<Steinberg::Vst::IComponentHandler2*> (hostComponentHandler2))
+        handler->release();
+   #endif
+}
+
+void ElukkaAudioProcessor::Vst3Extensions::setIComponentHandler (Steinberg::FUnknown* handler)
+{
+   #if defined (JucePlugin_Build_VST3) && JucePlugin_Build_VST3
+    if (auto* old = static_cast<Steinberg::Vst::IComponentHandler2*> (owner.hostComponentHandler2))
+    {
+        old->release();
+        owner.hostComponentHandler2 = nullptr;
+    }
+
+    if (handler != nullptr)
+    {
+        Steinberg::Vst::IComponentHandler2* handler2 = nullptr;
+        if (handler->queryInterface (Steinberg::Vst::IComponentHandler2::iid, (void**) &handler2) == Steinberg::kResultOk)
+            owner.hostComponentHandler2 = handler2;
+    }
+   #else
+    juce::ignoreUnused (handler);
+   #endif
+}
+
+bool ElukkaAudioProcessor::beginHostGroupEdit()
+{
+   #if defined (JucePlugin_Build_VST3) && JucePlugin_Build_VST3
+    if (auto* handler = static_cast<Steinberg::Vst::IComponentHandler2*> (hostComponentHandler2))
+    {
+        const auto result = handler->startGroupEdit();
+        return result == Steinberg::kResultOk || result == Steinberg::kResultTrue;
+    }
+   #endif
+    return false;
+}
+
+void ElukkaAudioProcessor::endHostGroupEdit()
+{
+   #if defined (JucePlugin_Build_VST3) && JucePlugin_Build_VST3
+    if (auto* handler = static_cast<Steinberg::Vst::IComponentHandler2*> (hostComponentHandler2))
+        handler->finishGroupEdit();
+   #endif
 }
 
 void ElukkaAudioProcessor::resetHarmTables()
@@ -512,7 +566,7 @@ void ElukkaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     renderRange (buffer, pos, numSamples - pos, bpm, playing, ppq + pos * beatsPerSample);
 }
 
-juce::ValueTree ElukkaAudioProcessor::saveState()
+juce::ValueTree ElukkaAudioProcessor::saveState (bool includeResynth)
 {
     auto state = apvts.copyState();
     state.setProperty ("syncRates", P::numSyncRates, nullptr);   // saves without this used the list before "8 Bars" was added
@@ -539,12 +593,13 @@ juce::ValueTree ElukkaAudioProcessor::saveState()
     juce::StringArray order;
     for (auto& f : fxOrder) order.add (P::fxKeys[f.load()]);
     state.setProperty ("fxOrder", order.joinIntoString (","), nullptr);
-    if (auto rs = getResynth())
-        state.appendChild (rs->toTree(), nullptr);
+    if (includeResynth)
+        if (auto rs = getResynth())
+            state.appendChild (rs->toTree(), nullptr);
     return state;
 }
 
-void ElukkaAudioProcessor::loadState (const juce::ValueTree& t)
+void ElukkaAudioProcessor::loadState (const juce::ValueTree& t, bool includeResynth)
 {
     if (! t.isValid() || ! t.hasType (apvts.state.getType())) return;
 
@@ -659,9 +714,12 @@ void ElukkaAudioProcessor::loadState (const juce::ValueTree& t)
     auto pt = t.getChildWithName ("Pattern");
     if (pt.isValid()) pattern.fromTree (pt);
 
-    // the state's own sample/image, or none (loading a preset or project without one clears the old one)
-    auto rs = t.getChildWithName ("Resynth");
-    setResynth (rs.isValid() ? ResynthData::fromTree (rs) : nullptr);
+    if (includeResynth)
+    {
+        // the state's own sample/image, or none (loading a preset or project without one clears the old one)
+        auto rs = t.getChildWithName ("Resynth");
+        setResynth (rs.isValid() ? ResynthData::fromTree (rs) : nullptr);
+    }
 
     bumpUiVersion();
 }
@@ -687,6 +745,7 @@ void ElukkaAudioProcessor::setStateInformation (const void* data, int sizeInByte
         for (int i = 0; i < (int) presets.entries.size(); ++i)
             if (presets.entries[(size_t) i].name == presets.currentName)
                 presets.currentIndex = i;
+        presets.clearHistory();
     }
 }
 
