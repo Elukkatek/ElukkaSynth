@@ -10,6 +10,8 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    bool keyPressed (const juce::KeyPress&) override;
+    void mouseDown (const juce::MouseEvent&) override;
 
     static constexpr int baseWidth = 1140, baseHeight = 790;
 
@@ -56,4 +58,5 @@ private:
     Knob macro1, macro2, master;
 
     int lastUiVersion = -1;
+    juce::uint32 lastUndoTime = 0;   // ignore key auto-repeat so holding Ctrl+Z does not skip steps
 };

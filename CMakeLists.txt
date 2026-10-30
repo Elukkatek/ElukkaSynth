@@ -11,14 +11,16 @@ if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-# Copy the built plugin into the system VST3 folder. Default on for local macOS builds (as before);
-# off elsewhere, since on Windows the folder needs admin rights and CI builds only package the result.
-if(APPLE)
-    set(ELUKKA_COPY_PLUGIN_DEFAULT ON)
+# Copy the built plugin into the host's standard VST3 folder after every build. Windows therefore needs
+# an elevated build shell because the system folder is under Program Files.
+if(WIN32)
+    set(ELUKKA_VST3_COPY_DIR "$ENV{CommonProgramFiles}/VST3")
+elseif(APPLE)
+    set(ELUKKA_VST3_COPY_DIR "$ENV{HOME}/Library/Audio/Plug-Ins/VST3")
 else()
-    set(ELUKKA_COPY_PLUGIN_DEFAULT OFF)
+    set(ELUKKA_VST3_COPY_DIR "$ENV{HOME}/.vst3")
 endif()
-option(ELUKKA_COPY_PLUGIN_AFTER_BUILD "Copy the VST3 into the user's plugin folder after building" ${ELUKKA_COPY_PLUGIN_DEFAULT})
+option(ELUKKA_COPY_PLUGIN_AFTER_BUILD "Copy the VST3 into the user's plugin folder after building" ON)
 
 add_subdirectory(JUCE)
 
@@ -30,6 +32,7 @@ juce_add_plugin(ElukkaSynth
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    VST3_COPY_DIR "${ELUKKA_VST3_COPY_DIR}"
     COPY_PLUGIN_AFTER_BUILD ${ELUKKA_COPY_PLUGIN_AFTER_BUILD}
     PLUGIN_MANUFACTURER_CODE Elkk
     PLUGIN_CODE Elks
@@ -37,6 +40,10 @@ juce_add_plugin(ElukkaSynth
     FORMATS VST3)
 
 juce_generate_juce_header(ElukkaSynth)
+
+# Needed to talk to the host's VST3 IComponentHandler2 (grouped undo entries).
+target_include_directories(ElukkaSynth PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/modules/juce_audio_processors/format_types/VST3_SDK")
 
 juce_add_binary_data(ElukkaSynthData SOURCES Resources/logo.jpg)
 

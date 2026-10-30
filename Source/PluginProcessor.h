@@ -10,7 +10,7 @@ class ElukkaAudioProcessor : public juce::AudioProcessor
 {
 public:
     ElukkaAudioProcessor();
-    ~ElukkaAudioProcessor() override = default;
+    ~ElukkaAudioProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -19,6 +19,22 @@ public:
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
+
+    // VST3: lets the plugin group many parameter changes into a single host undo step
+    // (loading a preset or undoing inside the plugin is one Ctrl+Z in the DAW, not one per knob).
+    struct Vst3Extensions final : juce::VST3ClientExtensions
+    {
+        explicit Vst3Extensions (ElukkaAudioProcessor& p) : owner (p) {}
+        void setIComponentHandler (Steinberg::FUnknown* handler) override;
+
+    private:
+        ElukkaAudioProcessor& owner;
+    };
+
+    VST3ClientExtensions* getVST3ClientExtensions() override { return &vst3Extensions; }
+
+    bool beginHostGroupEdit();
+    void endHostGroupEdit();
 
     const juce::String getName() const override { return "ElukkaSynth"; }
     bool acceptsMidi() const override { return true; }
@@ -36,8 +52,8 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     // Full state (parameters + shapes + harmonic tables + pattern + resynth) as a tree.
-    juce::ValueTree saveState();
-    void loadState (const juce::ValueTree& t);
+    juce::ValueTree saveState (bool includeResynth = true);
+    void loadState (const juce::ValueTree& t, bool includeResynth = true);
 
     // Non-parameter data edited by the UI (message thread)
     ModShape shapes[P::numMods];
@@ -72,6 +88,8 @@ public:
     PresetManager presets;
 
 private:
+    Vst3Extensions vst3Extensions { *this };
+    void* hostComponentHandler2 = nullptr;   // Vst::IComponentHandler2, owned reference
     struct OscRaw { std::atomic<float> *on, *wave, *level, *coarse, *fine, *phase, *rand, *phaseMode, *uniMode, *uniVoices, *uniDetune, *uniBlend, *uniWidth, *fmSrc, *fmAmt, *pan, *bassMono, *toFilter; };
     struct ModRaw { std::atomic<float> *mode, *rate, *sync, *syncRate, *start, *retrig, *smooth; };
     struct MxRaw  { std::atomic<float> *src, *dst, *amt; };

@@ -1,6 +1,168 @@
 #include "Presets.h"
 #include "PluginProcessor.h"
 
+PresetManager::PresetManager (ElukkaAudioProcessor& p) : proc (p)
+{
+    attachToParameters();
+}
+
+PresetManager::~PresetManager()
+{
+    detachFromParameters();
+}
+
+void PresetManager::attachToParameters()
+{
+    const auto& params = proc.getParameters();
+    numTrackedParams = params.size();
+    hostMoved = std::make_unique<std::atomic<bool>[]> ((size_t) numTrackedParams);
+    paramIds.assign ((size_t) numTrackedParams, juce::String());
+
+    for (int i = 0; i < numTrackedParams; ++i)
+    {
+        hostMoved[(size_t) i].store (false);
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (params[i]))
+            paramIds[(size_t) i] = ranged->getParameterID();
+        params[i]->addListener (this);
+    }
+}
+
+void PresetManager::detachFromParameters()
+{
+    for (auto* param : proc.getParameters())
+        param->removeListener (this);
+
+    hostMoved.reset();
+    paramIds.clear();
+    numTrackedParams = 0;
+}
+
+juce::RangedAudioParameter* PresetManager::getParam (int index) const
+{
+    const auto& params = proc.getParameters();
+    return index >= 0 && index < params.size()
+        ? dynamic_cast<juce::RangedAudioParameter*> (params[index])
+        : nullptr;
+}
+
+void PresetManager::parameterValueChanged (int parameterIndex, float)
+{
+    if (juce::MessageManager::existsAndIsCurrentThread())
+    {
+        ++hostChangeBurst;
+        return;
+    }
+
+    // The host moved a parameter (automation playback, the DAW's own undo, a project load). That is not
+    // an edit the user can undo, so remember it: commitUnrecordedChanges() folds it into the checkpoint.
+    if (hostMoved != nullptr && parameterIndex >= 0 && parameterIndex < numTrackedParams)
+        hostMoved[(size_t) parameterIndex].store (true);
+}
+
+void PresetManager::parameterGestureChanged (int parameterIndex, bool gestureIsStarting)
+{
+    if (! juce::MessageManager::existsAndIsCurrentThread())
+        return;
+
+    if (applyingState)
+        return;
+
+    if (gestureIsStarting)
+    {
+        // Seal anything edited before this gesture (mod shapes, pattern grid, ...) as its own step.
+        if (gestureDepth++ == 0)
+        {
+            commitUnrecordedChanges();
+            gestureBefore.clear();
+        }
+
+        // The value the parameter had before the gesture: what undo puts back when the gesture ends.
+        if (auto* param = getParam (parameterIndex))
+        {
+            const bool alreadyTracked = std::any_of (gestureBefore.begin(), gestureBefore.end(),
+                                                     [parameterIndex] (const auto& e) { return e.first == parameterIndex; });
+            if (! alreadyTracked)
+                gestureBefore.push_back ({ parameterIndex, param->convertFrom0to1 (param->getValue()) });
+        }
+    }
+    else if (gestureDepth > 0 && --gestureDepth == 0)
+    {
+        // Only the parameters this gesture touched are a step (not everything automation moved meanwhile).
+        commitGestureChanges();
+    }
+}
+
+void PresetManager::rememberState (const Snapshot& snapshot)
+{
+    for (auto& known : knownStates)
+        if (known.state.isEquivalentTo (snapshot.state) && known.currentName == snapshot.currentName)
+            return;
+
+    auto copy = snapshot;
+    copy.resynth.reset();   // only the state and name are needed; do not keep old images alive
+    knownStates.push_back (std::move (copy));
+    if (knownStates.size() > 32)
+        knownStates.erase (knownStates.begin());
+}
+
+void PresetManager::applyNameFrom (const Snapshot& snapshot)
+{
+    currentName = snapshot.currentName;
+    currentIndex = -1;
+    for (int i = 0; i < (int) entries.size(); ++i)
+    {
+        const auto& entry = entries[(size_t) i];
+        if (entry.isFactory == snapshot.isFactory && entry.index == snapshot.factoryIndex && entry.file == snapshot.file)
+        {
+            currentIndex = i;
+            break;
+        }
+    }
+}
+
+bool PresetManager::parameterStatesEqual (const juce::ValueTree& a, const juce::ValueTree& b)
+{
+    int compared = 0;
+    for (int i = 0; i < a.getNumChildren(); ++i)
+    {
+        const auto child = a.getChild (i);
+        const auto id = child["id"].toString();
+        if (id.isEmpty()) continue;
+
+        const auto other = b.getChildWithProperty ("id", id);
+        if (! other.isValid()) return false;
+
+        const auto x = (double) child["value"], y = (double) other["value"];
+        if (std::abs (x - y) > 1.0e-5 * juce::jmax (1.0, std::abs (x)))
+            return false;
+        ++compared;
+    }
+    return compared > 0;
+}
+
+void PresetManager::syncNameWithHost()
+{
+    const int burst = hostChangeBurst;
+    hostChangeBurst = 0;
+
+    // A knob move changes one or two values; a DAW undo of a preset load changes many at once.
+    if (burst < 16 || applyingState) return;
+
+    const auto state = proc.saveState (false);
+    for (auto it = knownStates.rbegin(); it != knownStates.rend(); ++it)
+    {
+        if (! parameterStatesEqual (it->state, state)) continue;
+
+        if (it->currentName != currentName)
+        {
+            applyNameFrom (*it);
+            checkpoint = captureSnapshot();
+            proc.bumpUiVersion();
+        }
+        return;
+    }
+}
+
 const juce::StringArray& PresetManager::categories()
 {
     static juce::StringArray c { "Pads", "Basses", "Arpeggios", "Keys", "Atmospheres", "Sequences" };
@@ -930,26 +1092,436 @@ void PresetManager::applyFactory (const FactoryPreset& fp)
     proc.setResynth (fp.image >= 0 ? ResynthData::fromImage (presetImage (fp.image), fp.name + " (image)") : nullptr);
 }
 
-void PresetManager::load (int entryIndex)
+class PresetManager::HistoryAction final : public juce::UndoableAction
 {
-    if (entryIndex < 0 || entryIndex >= (int) entries.size()) return;
-    auto& e = entries[(size_t) entryIndex];
+public:
+    HistoryAction (PresetManager& managerIn, Snapshot beforeIn, std::function<bool()> firstApplyIn)
+        : manager (managerIn), before (std::move (beforeIn)), firstApply (std::move (firstApplyIn)) {}
 
-    if (e.isFactory)
+    bool perform() override
     {
-        applyFactory (factory()[(size_t) e.index]);
+        if (! hasAfter)
+        {
+            if (! firstApply()) return false;
+            after = manager.captureSnapshot();
+            hasAfter = true;
+            return true;
+        }
+
+        return manager.restoreSnapshot (after);
     }
-    else if (auto xml = juce::XmlDocument::parse (e.file))
+
+    bool undo() override
     {
-        auto t = juce::ValueTree::fromXml (*xml);
+        return manager.restoreSnapshot (before);
+    }
+
+    int getSizeInUnits() override { return 1; }
+
+private:
+    PresetManager& manager;
+    Snapshot before, after;
+    std::function<bool()> firstApply;
+    bool hasAfter = false;
+};
+
+class PresetManager::SnapshotAction final : public juce::UndoableAction
+{
+public:
+    SnapshotAction (PresetManager& managerIn, Snapshot beforeIn, Snapshot afterIn)
+        : manager (managerIn), before (std::move (beforeIn)), after (std::move (afterIn)) {}
+
+    bool perform() override
+    {
+        // The state is already at `after` when the action is recorded, so only a redo has to apply it.
+        if (! firstPerform)
+        {
+            firstPerform = true;
+            return true;
+        }
+        return manager.restoreSnapshot (after);
+    }
+
+    bool undo() override { return manager.restoreSnapshot (before); }
+    int getSizeInUnits() override { return 1; }
+
+private:
+    PresetManager& manager;
+    Snapshot before, after;
+    bool firstPerform = false;
+};
+
+class PresetManager::ParamAction final : public juce::UndoableAction
+{
+public:
+    ParamAction (PresetManager& managerIn, std::vector<ParamChange> changesIn)
+        : manager (managerIn), changes (std::move (changesIn)) {}
+
+    bool perform() override
+    {
+        // The values are already at `after` when the action is recorded, so only a redo has to apply them.
+        if (! firstPerform)
+        {
+            firstPerform = true;
+            return true;
+        }
+        return manager.applyParamChanges (changes, false);
+    }
+
+    bool undo() override { return manager.applyParamChanges (changes, true); }
+    int getSizeInUnits() override { return 1; }
+
+private:
+    PresetManager& manager;
+    std::vector<ParamChange> changes;
+    bool firstPerform = false;
+};
+
+namespace
+{
+// A VST3 group edit: the DAW records every parameter change made inside it as one undo step.
+struct HostEditGroup
+{
+    explicit HostEditGroup (ElukkaAudioProcessor& p) : proc (p), active (p.beginHostGroupEdit()) {}
+    ~HostEditGroup() { if (active) proc.endHostGroupEdit(); }
+
+    ElukkaAudioProcessor& proc;
+    const bool active;
+};
+}
+
+bool PresetManager::applyPreset (const Entry& entry)
+{
+    HostEditGroup group (proc);
+
+    applyingState = true;
+    if (group.active)
+        for (auto* param : proc.getParameters())
+            param->beginChangeGesture();
+    const juce::ScopeGuard finish { [this, gestures = group.active]
+    {
+        if (gestures)
+            for (auto* param : proc.getParameters())
+                param->endChangeGesture();
+        applyingState = false;
+    } };
+
+    if (entry.isFactory)
+    {
+        const auto& presets = factory();
+        if (entry.index < 0 || entry.index >= (int) presets.size()) return false;
+        applyFactory (presets[(size_t) entry.index]);
+    }
+    else
+    {
+        auto xml = juce::XmlDocument::parse (entry.file);
+        if (xml == nullptr) return false;
+
+        auto state = juce::ValueTree::fromXml (*xml);
+        if (! state.isValid() || ! state.hasType (proc.apvts.state.getType())) return false;
+
         // Parameters missing from older files fall back to defaults.
         for (auto* param : proc.getParameters())
             param->setValueNotifyingHost (param->getDefaultValue());
-        proc.loadState (t);
+        proc.loadState (state);
     }
-    currentIndex = entryIndex;
-    currentName = e.name;
+
+    currentIndex = -1;
+    for (int i = 0; i < (int) entries.size(); ++i)
+        if (entries[(size_t) i].isFactory == entry.isFactory && entries[(size_t) i].index == entry.index && entries[(size_t) i].file == entry.file)
+        {
+            currentIndex = i;
+            break;
+        }
+    currentName = entry.name;
     proc.bumpUiVersion();
+    return true;
+}
+
+bool PresetManager::applyPattern (const PatternEntry& entry)
+{
+    if (entry.isFactory)
+    {
+        const auto& factoryPatterns = SeqPattern::factory();
+        if (entry.index < 0 || entry.index >= (int) factoryPatterns.size()) return false;
+        proc.pattern = factoryPatterns[(size_t) entry.index];
+    }
+    else
+    {
+        auto xml = juce::XmlDocument::parse (entry.file);
+        if (xml == nullptr) return false;
+
+        auto state = juce::ValueTree::fromXml (*xml);
+        if (! state.isValid() || ! state.hasType ("Pattern")) return false;
+        proc.pattern.fromTree (state);
+    }
+
+    proc.bumpUiVersion();
+    return true;
+}
+
+PresetManager::Snapshot PresetManager::captureSnapshot()
+{
+    Snapshot snapshot;
+    snapshot.state = proc.saveState (false);
+    snapshot.resynth = proc.getResynth();
+    snapshot.uiScale = proc.uiScale;
+    snapshot.currentIndex = currentIndex;
+    snapshot.currentName = currentName;
+    if (currentIndex >= 0 && currentIndex < (int) entries.size())
+    {
+        const auto& entry = entries[(size_t) currentIndex];
+        snapshot.isFactory = entry.isFactory;
+        snapshot.factoryIndex = entry.index;
+        snapshot.file = entry.file;
+    }
+    return snapshot;
+}
+
+bool PresetManager::restoreSnapshot (const Snapshot& snapshot)
+{
+    HostEditGroup group (proc);
+
+    applyingState = true;
+    if (group.active)
+        for (auto* param : proc.getParameters())
+            param->beginChangeGesture();
+    const juce::ScopeGuard finish { [this, gestures = group.active]
+    {
+        if (gestures)
+            for (auto* param : proc.getParameters())
+                param->endChangeGesture();
+        applyingState = false;
+    } };
+
+    if (proc.getResynth() != snapshot.resynth)
+        proc.setResynth (snapshot.resynth);
+    proc.loadState (snapshot.state, false);
+    proc.uiScale = snapshot.uiScale;
+
+    applyNameFrom (snapshot);
+    return true;
+}
+
+bool PresetManager::applyParamChanges (const std::vector<ParamChange>& changes, bool useBefore)
+{
+    if (changes.empty()) return true;
+
+    HostEditGroup group (proc);
+
+    applyingState = true;
+    if (group.active)
+        for (auto& change : changes)
+            if (auto* param = getParam (change.index))
+                param->beginChangeGesture();
+
+    for (auto& change : changes)
+        if (auto* param = getParam (change.index))
+            param->setValueNotifyingHost (param->convertTo0to1 (useBefore ? change.before : change.after));
+
+    if (group.active)
+        for (auto& change : changes)
+            if (auto* param = getParam (change.index))
+                param->endChangeGesture();
+
+    applyingState = false;
+    proc.bumpUiVersion();
+    return true;
+}
+
+bool PresetManager::snapshotsEqual (const Snapshot& a, const Snapshot& b)
+{
+    return statesEqual (a.state, b.state)
+        && a.resynth == b.resynth
+        && a.uiScale == b.uiScale
+        && a.currentName == b.currentName
+        && a.isFactory == b.isFactory
+        && a.factoryIndex == b.factoryIndex
+        && a.file == b.file;
+}
+
+bool PresetManager::statesEqual (const juce::ValueTree& a, const juce::ValueTree& b)
+{
+    if (a.getType() != b.getType()
+        || a.getNumChildren() != b.getNumChildren()
+        || a.getNumProperties() != b.getNumProperties())
+        return false;
+
+    // Some edits live on the root, not in a parameter child (the FX order is one): they are steps too.
+    for (int i = 0; i < a.getNumProperties(); ++i)
+    {
+        const auto name = a.getPropertyName (i);
+        if (! b.hasProperty (name) || a[name] != b[name]) return false;
+    }
+
+    for (int i = 0; i < a.getNumChildren(); ++i)
+    {
+        const auto child = a.getChild (i);
+        const auto id = child["id"].toString();
+
+        if (id.isEmpty())
+        {
+            if (! child.isEquivalentTo (b.getChild (i))) return false;
+            continue;
+        }
+
+        const auto other = b.getChildWithProperty ("id", id);
+        if (! other.isValid()) return false;
+
+        // Host parameter echoes can round the value slightly; that is not a new edit.
+        const auto x = (double) child["value"], y = (double) other["value"];
+        if (std::abs (x - y) > 1.0e-5 * juce::jmax (1.0, std::abs (x)))
+            return false;
+    }
+
+    return true;
+}
+
+void PresetManager::commitUnrecordedChanges()
+{
+    const auto current = captureSnapshot();
+    if (! hasCheckpoint)
+    {
+        checkpoint = current;
+        hasCheckpoint = true;
+        rememberState (checkpoint);
+        return;
+    }
+
+    // Values the host moved (automation playback, the DAW's own undo, a project load) are not user edits.
+    // Compare against a copy where those parameters still have the checkpoint's value, so they never
+    // become a history step; undoing an edit must not freeze such a parameter at an old position.
+    std::vector<int> moved;
+    for (int i = 0; i < numTrackedParams; ++i)
+        if (hostMoved != nullptr && hostMoved[(size_t) i].exchange (false))
+            moved.push_back (i);
+
+    auto comparable = current;
+    if (! moved.empty())
+    {
+        comparable.state = current.state.createCopy();
+        for (int index : moved)
+        {
+            const auto& id = paramIds[(size_t) index];
+            if (id.isEmpty()) continue;
+
+            const auto source = checkpoint.state.getChildWithProperty ("id", id);
+            auto target = comparable.state.getChildWithProperty ("id", id);
+            if (source.isValid() && target.isValid())
+                target.setProperty ("value", source["value"], nullptr);
+        }
+    }
+
+    if (snapshotsEqual (checkpoint, comparable))
+    {
+        checkpoint = current;   // nothing the user did: keep the host's values as the new baseline
+        return;
+    }
+
+    history.beginNewTransaction();
+    if (history.perform (new SnapshotAction (*this, checkpoint, current)))
+    {
+        checkpoint = current;
+        rememberState (checkpoint);
+    }
+}
+
+void PresetManager::commitGestureChanges()
+{
+    std::vector<ParamChange> changes;
+
+    for (auto& [index, before] : gestureBefore)
+        if (auto* param = getParam (index))
+        {
+            const float after = param->convertFrom0to1 (param->getValue());
+            if (std::abs (after - before) > 1.0e-5f * juce::jmax (1.0f, std::abs (before)))
+                changes.push_back ({ index, before, after });
+        }
+
+    gestureBefore.clear();
+    if (changes.empty()) return;
+
+    history.beginNewTransaction();
+    if (history.perform (new ParamAction (*this, std::move (changes))))
+    {
+        checkpoint = captureSnapshot();
+        rememberState (checkpoint);
+    }
+}
+
+bool PresetManager::undo()
+{
+    // Ctrl+Z pressed while a knob is still held: close that edit first so it is not recorded twice.
+    if (gestureDepth > 0)
+    {
+        gestureDepth = 0;
+        commitGestureChanges();
+    }
+
+    commitUnrecordedChanges();
+    const bool changed = history.undo();
+    if (changed)
+    {
+        checkpoint = captureSnapshot();
+        rememberState (checkpoint);
+    }
+    return changed;
+}
+
+bool PresetManager::redo()
+{
+    if (gestureDepth > 0)
+    {
+        gestureDepth = 0;
+        commitGestureChanges();
+    }
+
+    commitUnrecordedChanges();
+    const bool changed = history.redo();
+    if (changed)
+    {
+        checkpoint = captureSnapshot();
+        rememberState (checkpoint);
+    }
+    return changed;
+}
+
+bool PresetManager::canUndo() const
+{
+    return history.canUndo();
+}
+
+bool PresetManager::canRedo() const
+{
+    return history.canRedo();
+}
+
+void PresetManager::clearHistory()
+{
+    history.clearUndoHistory();
+    checkpoint = captureSnapshot();
+    hasCheckpoint = true;
+    gestureDepth = 0;
+    gestureBefore.clear();
+    hostChangeBurst = 0;
+    for (int i = 0; i < numTrackedParams; ++i)
+        if (hostMoved != nullptr)
+            hostMoved[(size_t) i].store (false);
+    knownStates.clear();
+    rememberState (checkpoint);
+}
+
+void PresetManager::load (int entryIndex)
+{
+    if (entryIndex < 0 || entryIndex >= (int) entries.size()) return;
+    commitUnrecordedChanges();
+    const auto entry = entries[(size_t) entryIndex];
+    history.beginNewTransaction();
+    if (history.perform (new HistoryAction (*this, captureSnapshot(), [this, entry] { return applyPreset (entry); })))
+    {
+        checkpoint = captureSnapshot();
+        rememberState (checkpoint);
+    }
 }
 
 bool PresetManager::save (const juce::String& name, const juce::String& category)
@@ -971,6 +1543,7 @@ bool PresetManager::save (const juce::String& name, const juce::String& category
         if (! entries[(size_t) i].isFactory && entries[(size_t) i].file == file)
             currentIndex = i;
     currentName = name;
+    rememberState (captureSnapshot());
     return true;
 }
 
@@ -1014,12 +1587,14 @@ void PresetManager::refreshPatterns()
 void PresetManager::loadPattern (int index)
 {
     if (index < 0 || index >= (int) patterns.size()) return;
-    auto& e = patterns[(size_t) index];
-    if (e.isFactory)
-        proc.pattern = SeqPattern::factory()[(size_t) e.index];
-    else if (auto xml = juce::XmlDocument::parse (e.file))
-        proc.pattern.fromTree (juce::ValueTree::fromXml (*xml));
-    proc.bumpUiVersion();
+    commitUnrecordedChanges();
+    const auto entry = patterns[(size_t) index];
+    history.beginNewTransaction();
+    if (history.perform (new HistoryAction (*this, captureSnapshot(), [this, entry] { return applyPattern (entry); })))
+    {
+        checkpoint = captureSnapshot();
+        rememberState (checkpoint);
+    }
 }
 
 bool PresetManager::savePattern (const juce::String& name)

@@ -15,6 +15,10 @@ ElukkaAudioProcessorEditor::ElukkaAudioProcessorEditor (ElukkaAudioProcessor& p)
     logoArea.setMouseCursor (juce::MouseCursor::PointingHandCursor);
     logoArea.onClick = [this] { showCredits(); };
     view.addAndMakeVisible (logoArea);
+    setWantsKeyboardFocus (true);
+    // FL Studio takes the native keyboard focus back on every click, so every click inside the plugin
+    // has to take it again for Ctrl+Z to reach the plugin instead of the host.
+    addMouseListener (this, true);
 
     const char* names[] { "SYNTH", "HARMONICS", "RESYNTH", "SEQUENCER", "FX", "MATRIX" };
     pages[0] = std::make_unique<SynthPage> (p);
@@ -208,7 +212,13 @@ void ElukkaAudioProcessorEditor::showPresetMenu()
     }
 
     juce::Component::SafePointer<ElukkaAudioProcessorEditor> safe (this);
-    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetButton).withMinimumWidth (presetButton.getWidth()),
+    // Draw the menu inside the plugin window instead of spawning a native popup window: clicks on a
+    // separate popup window would not reach this editor's mouse listener, so keyboard focus would
+    // stay with the host after picking a preset (and Ctrl+Z would go to the host).
+    menu.showMenuAsync (juce::PopupMenu::Options()
+                            .withTargetComponent (&presetButton)
+                            .withParentComponent (this)
+                            .withMinimumWidth (presetButton.getWidth()),
                         [safe] (int result)
                         {
                             if (safe == nullptr || result <= 0) return;
@@ -278,12 +288,61 @@ void ElukkaAudioProcessorEditor::deletePresetDialog()
     }), true);
 }
 
+bool ElukkaAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
+{
+    const auto mods = key.getModifiers();
+    if (! mods.isCommandDown() || mods.isAltDown()) return false;
+
+    const auto c = juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) key.getKeyCode());
+    auto& pm = proc.presets;
+
+    if (c == 'Z')
+    {
+        const auto now = juce::Time::getMillisecondCounter();
+        if (now - lastUndoTime < 150)   // auto-repeat: one key press = one step
+            return true;
+
+        const bool changed = mods.isShiftDown() ? pm.redo() : pm.undo();
+        if (changed)
+        {
+            lastUndoTime = now;
+            updatePresetButton();
+            return true;
+        }
+    }
+    else if (c == 'Y')
+    {
+        const bool changed = pm.redo();
+        if (changed)
+        {
+            updatePresetButton();
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void ElukkaAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
+{
+    // Text fields need the focus themselves.
+    auto* c = e.eventComponent;
+    if (c != nullptr && (dynamic_cast<juce::TextEditor*> (c) != nullptr
+                         || c->findParentComponentOfClass<juce::TextEditor>() != nullptr))
+        return;
+
+    grabKeyboardFocus();
+}
+
 void ElukkaAudioProcessorEditor::timerCallback()
 {
    #if JUCE_MAC
     // the host attaches the editor to its window some time after creating it
     if (! hostWindowKept) hostWindowKept = keepHostWindowVisible (*this);
    #endif
+    // If the DAW undid/redid a preset load in its own history, show the matching preset name.
+    proc.presets.syncNameWithHost();
+
     const int v = proc.uiVersion.load();
     if (v != lastUiVersion)
     {
