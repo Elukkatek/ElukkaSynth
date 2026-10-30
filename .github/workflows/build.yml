@@ -13,7 +13,7 @@ jobs:
     name: Windows x64
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: scripts/package.sh windows build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3 dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ElukkaSynth-Windows-x64
           path: dist/*.zip
@@ -62,7 +62,7 @@ jobs:
     name: Linux x64
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -95,7 +95,7 @@ jobs:
       - name: Package
         run: scripts/package.sh linux build/ElukkaSynth_artefacts/Release/VST3/ElukkaSynth.vst3 dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ElukkaSynth-Linux-x64
           path: dist/*.zip
@@ -116,7 +116,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
