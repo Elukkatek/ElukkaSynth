@@ -776,8 +776,12 @@ void ResynthData::analysePitch (ResynthData& d, const float* mono, int len, doub
     }
 
     // ---- note events: link notes across frames by pitch continuity (one frame may be skipped) ----
+    // A note that comes back within 100 ms at the same pitch (within 35 c) continues its event: the frames skipped
+    // around every attack (a drum hit under a pad, the next note of an arpeggio) would otherwise split one held note
+    // into events with slightly different centre pitches, and every partial of the note would step with each one.
     struct Event { int firstFrame = -1, lastFrame = -1, extendedAt = -1, count = 0; float lastHz = 0.0f; std::vector<std::pair<float, float>> midiW; float centre = 0.0f; bool live = false; };
     std::vector<Event> events;
+    const int rejoinFrames = (int) std::lround (0.1 * d.frameRate);
     for (int f = 0; f < F; ++f)
         for (auto& n : notes[(size_t) f])
         {
@@ -786,9 +790,9 @@ void ResynthData::analysePitch (ResynthData& d, const float* mono, int len, doub
             for (int e = 0; e < (int) events.size(); ++e)
             {
                 auto& ev = events[(size_t) e];
-                if (ev.lastFrame < f - 2 || ev.lastFrame >= f || ev.extendedAt == f) continue;
+                if (ev.lastFrame < f - rejoinFrames || ev.lastFrame >= f || ev.extendedAt == f) continue;
                 const float c = std::abs (1200.0f * std::log2 (n.hz / ev.lastHz));
-                if (c < bestCents) { bestCents = c; best = e; }
+                if (c < bestCents && (ev.lastFrame >= f - 2 || c < 35.0f)) { bestCents = c; best = e; }
             }
             if (best < 0) { events.push_back ({}); best = (int) events.size() - 1; events.back().firstFrame = f; }
             auto& ev = events[(size_t) best];
@@ -892,34 +896,60 @@ void ResynthData::analysePitch (ResynthData& d, const float* mono, int len, doub
             d.noteMidi[row + (size_t) s] = best;
         }
     }
-    // A partial keeps its note for as long as it sounds; it only changes when another note claims it, and that claim
-    // holds for 50 ms. Otherwise the fading partials of a note that has ended would take the next note (their nearest
-    // one) and swoop by the difference of the two corrections, and a harmonic two notes share, or an unclaimed partial
-    // whose nearest note comes and goes, would flip from frame to frame: every change moves the partial's Tune
-    // correction and is heard as a pitch wiggle. Decided with look-ahead, so a new note still takes effect on its
-    // first frame.
+    // A partial keeps one note for as long as it sounds: the first note that claims it for 50 ms within its first 150 ms
+    // (a note's attack frames only borrow tags, so this is decided with look-ahead and the note takes effect on the
+    // partial's first frame), else the tag of its first frame. Later another note takes it over only when the partial
+    // changed: its note has ended and it holds its level (a harmonic the next note continues; a fading one is the old
+    // note's tail), it got at least 6 dB louder (a new note starting on a harmonic a sounding note already has), or its
+    // pitch moved 60 c or more since the note was set (two notes the long bass window cannot separate glide into one
+    // another as one track). Otherwise it is one steady sinusoid, and re-assigning it (a harmonic two chord notes
+    // share, an unclaimed partial whose nearest note comes and goes) would only move its Tune correction, by the whole
+    // difference between the two notes' corrections: a pitch swoop on a tone that did not change.
     {
-        const int hold = juce::jmax (2, (int) std::lround (0.05 * d.frameRate));
+        const int hold = juce::jmax (2, (int) std::lround (0.05 * d.frameRate)), settle = (int) std::lround (0.15 * d.frameRate);
         auto same = [] (float a, float b) { return std::abs (a - b) < 0.01f; };
         for (int s = 0; s < S; ++s)
         {
             auto at = [&] (int f) { return (size_t) f * (size_t) S + (size_t) s; };
             auto tag = [&] (int f) -> float& { return d.noteMidi[at (f)]; };
-            auto sounding = [&] (int f) { return d.amp[at (f)] > 0.0f; };
             for (int f = 0; f < F;)
             {
-                if (! sounding (f)) { ++f; continue; }
+                if (d.amp[at (f)] <= 0.0f) { ++f; continue; }
                 int end = f;
-                while (end < F && sounding (end)) ++end;
+                while (end < F && d.amp[at (end)] > 0.0f) ++end;
                 float cur = tag (f);
-                for (int i = f + 1; i < end;)
+                int curFrom = f;
+                bool curClaimed = false;
+                for (int i = f; i < end;)
                 {
-                    if (same (tag (i), cur)) { ++i; continue; }
                     int j = i;
-                    while (j < end && same (tag (j), tag (i))) ++j;
-                    bool claim = false;   // a note claimed the partial within the first 50 ms (a note's attack frames borrow tags, unclaimed)
-                    for (int k = i; k < juce::jmin (j, i + hold); ++k) claim |= claimed[at (k)] != 0;
-                    if (claim && j - i >= hold) cur = tag (i);
+                    bool claim = false;
+                    while (j < end && same (tag (j), tag (i))) claim |= claimed[at (j++)] != 0;
+                    const bool lasting = claim && (j - i >= hold || j == end);
+                    bool take = false;
+                    if (lasting && same (tag (i), cur)) curClaimed = true;
+                    else if (lasting && ! curClaimed && i < f + settle) take = true;
+                    else if (lasting)
+                    {
+                        // judged over the claim's first 50 ms: the note it replaces may still be ending, and a partial
+                        // gliding onto the new note's harmonic is still on its way
+                        const int w = juce::jmin (j, i + hold) - 1;
+                        bool ended = true;   // the partial's note is no longer among the frame's notes
+                        for (int k = 0; k < maxNotesPerFrame; ++k) ended &= ! same (d.frameNotes[(size_t) w * (size_t) maxNotesPerFrame + (size_t) k], cur);
+                        float moved = 0.0f;
+                        for (int k = i; k <= w; ++k) moved = juce::jmax (moved, std::abs (1200.0f * std::log2 (d.freq[at (k)] / d.freq[at (curFrom)])));
+                        float before = 1.0e9f, after = 0.0f, later = 0.0f;
+                        for (int k = juce::jmax (f, i - 3); k < i; ++k) before = juce::jmin (before, d.amp[at (k)]);
+                        for (int k = i; k < juce::jmin (end, i + 3); ++k) after = juce::jmax (after, d.amp[at (k)]);
+                        for (int k = juce::jmax (i, juce::jmin (end, i + 2 * hold) - 3); k < juce::jmin (end, i + 2 * hold); ++k) later = juce::jmax (later, d.amp[at (k)]);
+                        const bool sustained = later >= 0.84f * after;   // not fading like the tail of a note that has ended (-1.5 dB in 100 ms)
+                        take = (ended && sustained) || after >= 2.0f * before || moved >= 60.0f;
+                    }
+                    if (take)
+                    {
+                        if (! curClaimed) for (int k = f; k < i; ++k) tag (k) = tag (i);
+                        cur = tag (i); curFrom = i; curClaimed = true;
+                    }
                     else for (int k = i; k < j; ++k) tag (k) = cur;
                     i = j;
                 }
@@ -927,6 +957,7 @@ void ResynthData::analysePitch (ResynthData& d, const float* mono, int len, doub
             }
         }
     }
+
 
     // ---- summary for the display: the most prominent pitch class over all notes ----
     struct Rec { float cents, hz; double w; };
@@ -1132,5 +1163,6 @@ std::shared_ptr<ResynthData> ResynthData::fromAudio (const juce::AudioBuffer<flo
     for (int i = 0; i < len; ++i) mono[(size_t) i] = 0.5f * (L[i] + R[i]);
     analysePitch (*d, mono.data(), len, sampleRate);
     d->detectedBpm = detectTempo (mono.data(), len, sampleRate);
+    d->computeLevels();
     return d;
 }

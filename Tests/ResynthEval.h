@@ -421,6 +421,7 @@ inline juce::AudioBuffer<float> resynthesize (const juce::AudioBuffer<float>& sr
     auto setP = [&q] (const char* id, float v) { auto* p = q.apvts.getParameter (id); p->setValueNotifyingHost (p->convertTo0to1 (v)); };
     setP ("o1_wave", (float) P::WResynth); setP ("o1_level", 1.0f); setP ("master", 0.0f);
     setP ("rs_sync", 0.0f); setP ("rs_loop", 0.0f); setP ("ampA", 0.001f); setP ("ampS", 1.0f); setP ("ampR", 0.01f);
+    if (const char* tune = std::getenv ("ELUKKA_EVAL_TUNE")) setP ("rs_tune", (float) std::atof (tune));   // listen to the tuned result (key C4)
     const auto t0 = juce::Time::getMillisecondCounterHiRes();
     auto data = ResynthData::fromAudio (src, sr, "eval");
     // diagnostics: render only the partials or only the residual
@@ -676,7 +677,7 @@ inline int runFolder (const juce::File& dir, const juce::File& outDir)
                   << "  noise->tones " << juce::String (fl, 3) << "  wobble " << juce::String (wob, 1) << "c (quiet " << juce::String (qwob, 0) << "c)  flutter " << juce::String (flut, 2) << " dB  width " << juce::String (wid, 3) << "  render " << juce::String (cpu * 100.0, 1) << "%  analysis "
                   << (int) ms << " ms\n";
         if (outDir != juce::File())
-            writeWav (outDir.getChildFile (f.getFileNameWithoutExtension() + " (resynth).wav"), out, 16);
+            writeWav (outDir.getChildFile (f.getFileNameWithoutExtension() + (std::getenv ("ELUKKA_EVAL_TUNE") ? " (resynth tune " + juce::String (std::getenv ("ELUKKA_EVAL_TUNE")) + ")" : " (resynth)") + ".wav"), out, 16);
     }
     std::cout << "weighted average: dist " << juce::String (dsum / wsum, 3) << "  fine " << juce::String (fsum / wsum, 3)
               << "  noise->tones " << juce::String (tsum / wsum, 4) << "  wobble " << juce::String (wobSum / wsum, 2) << "c quiet " << juce::String (qwobSum / wsum, 1) << "c  flutter " << juce::String (flutSum / wsum, 2) << " dB  width " << juce::String (widSum / wsum, 3) << "  worst render " << juce::String (worstCpu * 100.0, 1) << "%\n";
@@ -714,6 +715,25 @@ inline float tagFlipsPerSec (const ResynthData& d, float* steady = nullptr)
     return d.durationSec > 0.0 ? (float) (flips / d.durationSec) : 0.0f;
 }
 
+// How much Tune 100 % (key C4) moves the pitch of sounding partials whose own pitch stays put, in cents per second,
+// weighted by level: every change of a partial's note tag moves its correction by the difference of the two notes'
+// corrections, and that is heard as a wiggle or swoop on a steady tone. Pads and chords are where this shows.
+inline float tuneSwoopPerSec (const ResynthData& d)
+{
+    const int S = d.numSlots, F = d.numFrames;
+    auto corrOf = [] (float m) { return m > 0.0f ? ResynthData::tuneTarget (m, 60.0f) - m : 0.0f; };
+    double swoop = 0.0, ampSum = 0.0;
+    for (int f = 1; f < F; ++f)
+        for (int s = 0; s < S; ++s)
+        {
+            const size_t i = (size_t) f * (size_t) S + (size_t) s;
+            ampSum += d.amp[i];
+            if (d.amp[i] <= 0.0f || d.amp[i - (size_t) S] <= 0.0f || std::abs (d.freq[i] - d.freq[i - (size_t) S]) > 0.0595f * d.freq[i - (size_t) S]) continue;
+            swoop += d.amp[i] * 100.0 * std::abs (corrOf (d.noteMidi[i]) - corrOf (d.noteMidi[i - (size_t) S]));
+        }
+    return ampSum > 0.0 && d.durationSec > 0.0 ? (float) (swoop / (ampSum / F) / d.durationSec) : 0.0f;
+}
+
 inline int runPitchFolder (const juce::File& dir)
 {
     auto files = dir.findChildFiles (juce::File::findFiles, false, "*.wav;*.mp3;*.aif;*.aiff;*.flac");
@@ -728,7 +748,7 @@ inline int runPitchFolder (const juce::File& dir)
                   << " pitch " << juce::String (d->detectedFundamentalHz, 1).paddedLeft (' ', 7) << " Hz (" << noteName (d->detectedFundamentalHz).paddedRight (' ', 8)
                   << ")  share " << juce::String (d->pitchConfidence, 2) << "  note events " << d->numNoteEvents
                   << "  first note " << (d->firstNoteMidi > 0.0f ? noteName (440.0f * std::exp2 ((d->firstNoteMidi - 69.0f) / 12.0f)) : juce::String ("-")).paddedRight (' ', 8)
-                  << "  tag flips/s " << juce::String (tagFlipsPerSec (*d, &steady), 1) << " (steady partial " << juce::String (steady, 1) << ")\n";
+                  << "  tag flips/s " << juce::String (tagFlipsPerSec (*d, &steady), 1) << " (steady partial " << juce::String (steady, 1) << ")  Tune swoop " << juce::String (tuneSwoopPerSec (*d), 0) << " c/s\n";
     }
     return 0;
 }
