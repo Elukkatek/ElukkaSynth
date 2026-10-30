@@ -923,12 +923,12 @@ ResynthPage::ResynthPage (ElukkaAudioProcessor& p)
       speed (p.apvts, "rs_speed", "Speed"),
       bpm (p.apvts, "rs_bpm", "Source BPM"), pos (p.apvts, "rs_pos", "Position"),
       sync (p.apvts, "rs_sync", "Sync to Host"), loop (p.apvts, "rs_loop", "Loop"),
-      lvlAttack (p.apvts, "rsl_attack", "Attack"), lvlRelease (p.apvts, "rsl_release", "Release"),
+      lvlSmooth (p.apvts, "rsl_smooth", "Smooth"),
       lvlGain (p.apvts, "rsl_gain", "Gain"), lvlFloor (p.apvts, "rsl_floor", "Floor")
 {
     for (auto* c : std::initializer_list<juce::Component*> { &sourcePanel, &playPanel, &loadAudioBtn, &loadImageBtn, &clearBtn, &detectBtn,
                                                               &doubleBtn, &halveBtn, &useOsc1, &info, &view, &tune, &gate, &lift, &subLift, &speed, &bpm, &pos, &sync, &loop,
-                                                              &levelTitle, &levelHelp, &levelMeter, &lvlAttack, &lvlRelease, &lvlGain, &lvlFloor })
+                                                              &levelTitle, &levelHelp, &levelMeter, &lvlSmooth, &lvlGain, &lvlFloor })
         addAndMakeVisible (c);
 
     loadAudioBtn.onClick = [this] { loadAudio(); };
@@ -966,8 +966,7 @@ ResynthPage::ResynthPage (ElukkaAudioProcessor& p)
     levelHelp.setText ("A modulation source that follows the loudness of the source at the playhead. "
                        "Right-click a knob and choose Resynth to map it.", juce::dontSendNotification);
     levelMeter.setTooltip ("Resynth Level of the newest note");
-    lvlAttack.slider.setTooltip ("How fast the level rises");
-    lvlRelease.slider.setTooltip ("How fast the level falls");
+    lvlSmooth.slider.setTooltip ("Averages the level over this time around the playhead (no lag; every note follows the same curve)");
     lvlGain.slider.setTooltip ("Scales the level (it stops at 100 %)");
     lvlFloor.slider.setTooltip ("Source level that counts as 0; the loudest moment of the source is 100 %");
     refresh();
@@ -1140,7 +1139,7 @@ void ResynthPage::resized()
     c.removeFromTop (4);
     levelMeter.setBounds (c.removeFromTop (8));
     c.removeFromTop (8);
-    layoutRow (c.removeFromTop (70), { &lvlAttack, &lvlRelease, &lvlGain, &lvlFloor }, 66, 2);
+    layoutRow (c.removeFromTop (70), { &lvlSmooth, &lvlGain, &lvlFloor }, 66, 2);
 
     area.removeFromLeft (8);
     auto bottom = area.removeFromBottom (130);

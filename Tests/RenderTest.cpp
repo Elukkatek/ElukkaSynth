@@ -3319,8 +3319,8 @@ int main (int argc, char** argv)
 
     // Resynth Level: a modulation source following the source's level at the playhead. The source is a tone at full level
     // for 0.5 s, then 24 dB quieter for 0.5 s (looped). With Floor -48 dB the loud half reads 1 and the quiet half 0.5;
-    // Gain 200 % lifts the quiet half to 1; a slow release holds the level up after the drop; mapped to Osc 1 Level
-    // (amount -1) the output gets quieter where the source is loud.
+    // Gain 200 % lifts the quiet half to 1; Smooth averages symmetrically around the playhead (no lag: halfway at the
+    // drop itself); mapped to Osc 1 Level (amount -1) the output gets quieter where the source is loud.
     {
         const int half = (int) (0.5 * sr);
         juce::AudioBuffer<float> steps (1, 2 * half);
@@ -3328,14 +3328,14 @@ int main (int argc, char** argv)
             steps.setSample (0, i, (i < half ? 0.5f : 0.5f * juce::Decibels::decibelsToGain (-24.0f)) * std::sin (juce::MathConstants<float>::twoPi * 220.0f * (float) i / (float) sr));
         auto data = ResynthData::fromAudio (steps, sr, "steps");
         // Resynth Level of the newest voice at the given times (s) after the note starts, and the output RMS per 0.5 s half
-        auto run = [&] (float gain, float releaseMs, int mapDst, std::vector<double> times, std::vector<float>& levels, float* rmsHalves)
+        auto run = [&] (float gain, float smoothMs, int mapDst, std::vector<double> times, std::vector<float>& levels, float* rmsHalves)
         {
             auto qp = std::make_unique<ElukkaAudioProcessor>();
             auto& q = *qp;
             q.setPlayConfigDetails (0, 2, sr, block);
             setP (q, "o1_wave", (float) P::WSine); setP (q, "o1_level", 0.5f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f);
             setP (q, "rs_sync", 0.0f); setP (q, "rs_speed", 1.0f); setP (q, "rs_loop", 1.0f);
-            setP (q, "rsl_attack", 0.0f); setP (q, "rsl_release", releaseMs); setP (q, "rsl_gain", gain); setP (q, "rsl_floor", -48.0f);
+            setP (q, "rsl_smooth", smoothMs); setP (q, "rsl_gain", gain); setP (q, "rsl_floor", -48.0f);
             if (mapDst != P::DstNone) { setP (q, "mx1_src", (float) P::SrcRsLevel); setP (q, "mx1_dst", (float) mapDst); setP (q, "mx1_amt", -1.0f); }
             q.setResynth (data);
             q.prepareToPlay (sr, block);
@@ -3353,25 +3353,263 @@ int main (int argc, char** argv)
             }
             for (int h = 0; h < 2; ++h) rmsHalves[h] = (float) std::sqrt (sumSq[h] / half);
         };
-        std::vector<float> plain, lifted, slow;
+        std::vector<float> plain, lifted;
         float rms[2], rmsMapped[2];
         run (100.0f, 0.0f, P::DstNone, { 0.25, 0.75 }, plain, rms);
         run (200.0f, 0.0f, P::DstNone, { 0.25, 0.75 }, lifted, rms);
-        run (100.0f, 300.0f, P::DstNone, { 0.52 }, slow, rms);
+        // the curve itself, Smooth 200 ms: halfway (-12 dB) at the drop, still full 0.2 s before it, fully down 0.2 s after
+        const float atDrop = data->smoothedLevelDb (0.5, 0.2, false), before = data->smoothedLevelDb (0.28, 0.2, false), after = data->smoothedLevelDb (0.72, 0.2, false);
         std::vector<float> unused;
         run (100.0f, 0.0f, P::DstO1Level, {}, unused, rmsMapped);
         // unmapped, Osc 1 plays at the same level in both halves; mapped, the loud half (level 1) is turned fully down
         // and the quiet half (level 0.5) half way
         const float mappedDb = juce::Decibels::gainToDecibels (rmsMapped[1] / std::max (rmsMapped[0], 1.0e-9f));
-        const bool ok = plain.size() == 2 && lifted.size() == 2 && slow.size() == 1
+        const bool ok = plain.size() == 2 && lifted.size() == 2
                         && std::abs (plain[0] - 1.0f) < 0.05f && std::abs (plain[1] - 0.5f) < 0.05f
-                        && lifted[0] > 0.95f && lifted[1] > 0.95f && slow[0] > 0.85f && mappedDb > 12.0f
+                        && lifted[0] > 0.95f && lifted[1] > 0.95f && mappedDb > 12.0f
+                        && std::abs (atDrop + 12.0f) < 1.5f && before > -1.5f && std::abs (after + 24.0f) < 1.5f
                         && P::modSources[P::SrcRsLevel] == "Resynth Level";
         if (! ok) ++failures;
         std::cout << (ok ? "ok   " : "FAIL ") << "Resynth Level: loud half " << (plain.size() == 2 ? juce::String (plain[0], 2) : "?") << ", 24 dB quieter half "
                   << (plain.size() == 2 ? juce::String (plain[1], 2) : "?") << " (Floor -48 dB); Gain 200 %: " << (lifted.size() == 2 ? juce::String (lifted[1], 2) : "?")
-                  << "; 20 ms after the drop with 300 ms release: " << (slow.size() == 1 ? juce::String (slow[0], 2) : "?")
+                  << "; Smooth 200 ms: " << juce::String (before, 1) << " / " << juce::String (atDrop, 1) << " / " << juce::String (after, 1) << " dB 0.22 s before / at / 0.22 s after the drop"
                   << "; mapped to Osc 1 Level the quiet half is " << juce::String (mappedDb, 1) << " dB louder\n";
+
+        // Resynth Level on Distortion Drive (a global destination: the newest voice's level): repeated notes of a decaying
+        // source in Poly, Mono and with the sequencer must not click. The drive changes every control block; unramped,
+        // each step was a step in the waveform.
+        {
+            juce::AudioBuffer<float> pluck (1, (int) (1.0 * sr));
+            for (int i = 0; i < pluck.getNumSamples(); ++i)
+            {
+                const float t = (float) i / (float) sr;
+                pluck.setSample (0, i, 0.5f * std::exp (-t * 6.0f) * std::sin (juce::MathConstants<float>::twoPi * 220.0f * t));
+            }
+            auto pluckData = ResynthData::fromAudio (pluck, sr, "pluck");
+            juce::String rep;
+            bool distOk = true;
+            const char* modeNames[] { "Poly", "Mono", "Sequencer" };
+            for (int mode = 0; mode < 3; ++mode)
+            {
+                auto qp = std::make_unique<ElukkaAudioProcessor>();
+                auto& q = *qp;
+                q.setPlayConfigDetails (0, 2, sr, block);
+                setP (q, "o1_wave", (float) P::WResynth); setP (q, "o1_level", 1.0f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f); setP (q, "ampR", 0.4f);
+                setP (q, "rs_sync", 0.0f); setP (q, "rs_loop", 0.0f);
+                setP (q, "polyMode", mode == 1 ? 1.0f : 0.0f);
+                setP (q, "dist_on", 1.0f); setP (q, "dist_drive", 0.0f); setP (q, "dist_mix", 1.0f);
+                setP (q, "mx1_src", (float) P::SrcRsLevel); setP (q, "mx1_dst", (float) P::DstDistDrive); setP (q, "mx1_amt", 1.0f);
+                if (mode == 2) { setP (q, "sq_on", 1.0f); setP (q, "sq_gate", 0.8f); }
+                q.setResynth (pluckData);
+                q.prepareToPlay (sr, block);
+                const int period = (int) (0.3 * sr), noteLen = (int) (0.25 * sr), total = 8 * period;
+                juce::AudioBuffer<float> out (2, total), buf (2, block);
+                out.clear();
+                for (int pos = 0; pos + block <= total; pos += block)
+                {
+                    juce::MidiBuffer midi;
+                    const int local = pos % period;
+                    if (mode == 2 ? pos == 0 : local < block) midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                    if (mode != 2 && noteLen - local >= 0 && noteLen - local < block) midi.addEvent (juce::MidiMessage::noteOff (1, 60), noteLen - local);
+                    buf.clear();
+                    q.processBlock (buf, midi);
+                    for (int ch = 0; ch < 2; ++ch) out.copyFrom (ch, pos, buf, ch, 0, block);
+                }
+                const auto clicks = detectClicks (out, 0.05f, 1000);
+                distOk &= clicks.clicks == 0;
+                rep << modeNames[mode] << " " << clicks.clicks << " (worst " << juce::String (clicks.worst, 3) << ")" << (mode < 2 ? ", " : "");
+            }
+            if (! distOk) ++failures;
+            std::cout << (distOk ? "ok   " : "FAIL ") << "Resynth Level on Distortion Drive, repeated notes: clicks " << rep << "\n";
+        }
+
+        // Resynth Level on effect controls (global: the newest voice's level, which restarts from 0 at every note while
+        // the previous note still rings through the effects). Around each new note the output must be no rougher than
+        // with the control left alone or held at its modulated maximum: no steps per control block, no instant sweep.
+        {
+            juce::AudioBuffer<float> pluck (1, (int) (1.0 * sr));
+            for (int i = 0; i < pluck.getNumSamples(); ++i)
+            {
+                const float t = (float) i / (float) sr;
+                float v = 0.0f;
+                for (int h = 1; h <= 40; ++h) v += std::sin (juce::MathConstants<float>::twoPi * 110.0f * (float) h * t) / (float) h;
+                pluck.setSample (0, i, 0.3f * std::exp (-t * 6.0f) * v);
+            }
+            auto pluckData = ResynthData::fromAudio (pluck, sr, "bright pluck");
+            struct D { int dst; const char* on; const char* name; float amt; const char* baseId = nullptr; float base = 0.0f; };
+            const D dsts[] { { P::DstFxfCutoff, "fxf_on", "FX Filter Cutoff", -1.0f, "fxf_cutoff", 1500.0f }, { P::DstFxfRes, "fxf_on", "FX Filter Res", 1.0f, "fxf_cutoff", 1500.0f },
+                             { P::DstEqHigh, "eq_on", "EQ High", 1.0f }, { P::DstDlyMix, "dly_on", "Delay Mix", 1.0f }, { P::DstDlyLp, "dly_on", "Delay LP", 1.0f, "dly_lp", 3000.0f },
+                             { P::DstCombFb, "comb_on", "Comb Feedback", -1.0f }, { P::DstDistDrive, "dist_on", "Dist Drive", 1.0f } };
+            // the worst |second difference| from 3 ms before to 15 ms after each note-on (notes 2..8), against the note's 50..100 ms
+            auto noteOnRoughness = [&] (const D& dd, int src)
+            {
+                auto qp = std::make_unique<ElukkaAudioProcessor>();
+                auto& q = *qp;
+                q.setPlayConfigDetails (0, 2, sr, block);
+                setP (q, "o1_wave", (float) P::WResynth); setP (q, "o1_level", 1.0f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f); setP (q, "ampR", 0.4f);
+                setP (q, "rs_sync", 0.0f); setP (q, "rs_loop", 0.0f);
+                setP (q, dd.on, 1.0f);
+                if (dd.baseId != nullptr) setP (q, dd.baseId, dd.base);
+                if (src != P::SrcNone) { setP (q, "mx1_src", (float) src); setP (q, "mx1_dst", (float) dd.dst); setP (q, "mx1_amt", dd.amt); setP (q, "macro1", 1.0f); }
+                q.setResynth (pluckData);
+                q.prepareToPlay (sr, block);
+                const int period = (int) (0.3 * sr), noteLen = (int) (0.25 * sr), total = 8 * period;
+                juce::AudioBuffer<float> out (2, total), buf (2, block);
+                out.clear();
+                for (int pos = 0; pos + block <= total; pos += block)
+                {
+                    juce::MidiBuffer midi;
+                    const int local = pos % period;
+                    if (local < block) midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                    if (noteLen - local >= 0 && noteLen - local < block) midi.addEvent (juce::MidiMessage::noteOff (1, 60), noteLen - local);
+                    buf.clear();
+                    q.processBlock (buf, midi);
+                    for (int ch = 0; ch < 2; ++ch) out.copyFrom (ch, pos, buf, ch, 0, block);
+                }
+                double sum = 0.0;
+                for (int nn = 1; nn < 8; ++nn)
+                {
+                    float peak = 0.0f; double ref = 0.0; int nr = 0;
+                    for (int ch = 0; ch < 2; ++ch)
+                    {
+                        const float* x = out.getReadPointer (ch);
+                        const int on = nn * period;
+                        for (int i = on - (int) (0.003 * sr); i < on + (int) (0.015 * sr); ++i) peak = std::max (peak, std::abs (x[i + 1] - 2.0f * x[i] + x[i - 1]));
+                        for (int i = on + (int) (0.05 * sr); i < on + (int) (0.1 * sr); ++i) { ref += std::abs (x[i + 1] - 2.0f * x[i] + x[i - 1]); ++nr; }
+                    }
+                    sum += peak / juce::jmax (1.0e-9, ref / nr);
+                }
+                return (float) (sum / 7.0);
+            };
+            bool fxOk = true;
+            juce::String rep;
+            for (auto& dd : dsts)
+            {
+                const float plain = noteOnRoughness (dd, P::SrcNone), held = noteOnRoughness (dd, P::SrcMacro1), mod = noteOnRoughness (dd, P::SrcRsLevel);
+                const bool ok = mod < 1.3f * std::max (plain, held);
+                fxOk &= ok;
+                rep << dd.name << " " << juce::String (mod, 1) << " (" << juce::String (std::max (plain, held), 1) << ")" << (ok ? "" : " !") << "; ";
+            }
+            if (! fxOk) ++failures;
+            std::cout << (fxOk ? "ok   " : "FAIL ") << "Resynth Level on effects, roughness at each new note (modulated vs left alone / held at the maximum): " << rep << "\n";
+        }
+
+        // Every note restarts the follower: in Mono mode each note reuses the voice while the previous one is still
+        // releasing, and the level must still rise from 0 the same way on every note (the source fades in from
+        // -48 dB over 0.4 s, so where the follower starts from shows up for the whole attack).
+        {
+            juce::AudioBuffer<float> fade (1, (int) (1.0 * sr));
+            for (int i = 0; i < fade.getNumSamples(); ++i)
+            {
+                const float t = (float) i / (float) sr;
+                fade.setSample (0, i, 0.5f * juce::Decibels::decibelsToGain (-48.0f + 48.0f * juce::jmin (1.0f, t / 0.4f))
+                                          * std::sin (juce::MathConstants<float>::twoPi * 220.0f * t));
+            }
+            auto fadeData = ResynthData::fromAudio (fade, sr, "fade in");
+            auto qp = std::make_unique<ElukkaAudioProcessor>();
+            auto& q = *qp;
+            q.setPlayConfigDetails (0, 2, sr, block);
+            setP (q, "o1_wave", (float) P::WSine); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f); setP (q, "ampR", 1.0f);
+            setP (q, "polyMode", 1.0f);   // Mono
+            setP (q, "rs_sync", 0.0f); setP (q, "rs_speed", 1.0f); setP (q, "rs_loop", 0.0f);
+            setP (q, "rsl_smooth", 20.0f); setP (q, "rsl_gain", 100.0f); setP (q, "rsl_floor", -48.0f);
+            q.setResynth (fadeData);
+            q.prepareToPlay (sr, block);
+            juce::AudioBuffer<float> buf (2, block);
+            const int noteLen = (int) (0.25 * sr), gap = (int) (0.05 * sr), traceBlocks = (int) (0.2 * sr) / block;
+            std::vector<std::vector<float>> traces;
+            for (int note = 0; note < 4; ++note)
+            {
+                traces.emplace_back();
+                for (int pos = 0; pos < noteLen + gap; pos += block)
+                {
+                    juce::MidiBuffer midi;
+                    if (pos == 0) midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                    if (pos <= noteLen && pos + block > noteLen) midi.addEvent (juce::MidiMessage::noteOff (1, 60), noteLen - pos);
+                    buf.clear();
+                    q.processBlock (buf, midi);
+                    if ((int) traces.back().size() < traceBlocks) traces.back().push_back (q.uiRsLevel.load());
+                }
+            }
+            float worst = 0.0f;
+            for (int note = 1; note < 4; ++note)
+                for (int b = 0; b < traceBlocks; ++b) worst = std::max (worst, std::abs (traces[(size_t) note][(size_t) b] - traces[0][(size_t) b]));
+            const bool retrigOk = worst < 0.01f && traces[0][0] < 0.2f;
+            if (! retrigOk) ++failures;
+            std::cout << (retrigOk ? "ok   " : "FAIL ") << "Resynth Level restarts on every note (Mono, retriggered during the release): first block "
+                      << juce::String (traces[0][0], 3) << ", largest difference from the first note's attack " << juce::String (worst, 3) << "\n";
+        }
+
+        // Every note sounds the same. Resynth Level is a function of the playhead alone, mapped here to a voice destination
+        // (Osc 1 Level, also in Mono) and to an effect (FX Filter Cutoff). With notes starting on the same position in the
+        // host's blocks every note must be bit-identical. With notes starting anywhere in the blocks (every 0.3 s, not a
+        // whole number of blocks) the synth itself differs by about -47 dB from note to note (an oscillator's level ramps
+        // in over its first control block, whose length depends on where the note falls); the mapping may add nothing
+        // beyond that.
+        {
+            juce::AudioBuffer<float> bright (1, (int) (1.0 * sr));
+            for (int i = 0; i < bright.getNumSamples(); ++i)
+            {
+                const float t = (float) i / (float) sr;
+                const float env = std::exp (-t * 5.0f) * (1.0f + 0.5f * std::sin (juce::MathConstants<float>::twoPi * 7.0f * t));   // decay with a wobble
+                bright.setSample (0, i, 0.4f * env * std::sin (juce::MathConstants<float>::twoPi * 220.0f * t));
+            }
+            auto brightData = ResynthData::fromAudio (bright, sr, "wobbly decay");
+            auto render = [&] (int dst, float smoothMs, int polyMode, bool aligned)
+            {
+                auto qp = std::make_unique<ElukkaAudioProcessor>();
+                auto& q = *qp;
+                q.setPlayConfigDetails (0, 2, sr, block);
+                setP (q, "o1_wave", (float) P::WSaw); setP (q, "o1_level", 0.5f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f); setP (q, "ampR", 0.005f);
+                setP (q, "polyMode", (float) polyMode);
+                setP (q, "rs_sync", 0.0f); setP (q, "rs_loop", 0.0f); setP (q, "rsl_smooth", smoothMs);
+                if (dst == P::DstFxfCutoff) { setP (q, "fxf_on", 1.0f); setP (q, "fxf_cutoff", 300.0f); }
+                if (dst != P::DstNone) { setP (q, "mx1_src", (float) P::SrcRsLevel); setP (q, "mx1_dst", (float) dst); setP (q, "mx1_amt", dst == P::DstO1Level ? -0.3f : 0.6f); }
+                q.setResynth (brightData);
+                q.prepareToPlay (sr, block);
+                const int period = aligned ? (int) (0.3 * sr) / block * block : (int) (0.3 * sr), noteLen = (int) (0.25 * sr), total = 10 * period;
+                juce::AudioBuffer<float> out (2, total), buf (2, block);
+                out.clear();
+                for (int pos = 0; pos + block <= total; pos += block)
+                {
+                    juce::MidiBuffer midi;
+                    for (int on = 0; on < total; on += period)
+                    {
+                        if (on >= pos && on < pos + block) midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), on - pos);
+                        if (on + noteLen >= pos && on + noteLen < pos + block) midi.addEvent (juce::MidiMessage::noteOff (1, 60), on + noteLen - pos);
+                    }
+                    buf.clear();
+                    q.processBlock (buf, midi);
+                    for (int ch = 0; ch < 2; ++ch) out.copyFrom (ch, pos, buf, ch, 0, block);
+                }
+                // worst difference of notes 3..10 from note 2 over 0..0.24 s of each note, dB relative to note 2 (the first note
+                // after prepareToPlay also carries the plugin's own start-up smoothing)
+                const int len = (int) (0.24 * sr);
+                float worstDb = -200.0f;
+                for (int nn = 2; nn < 10; ++nn)
+                {
+                    double d = 0.0, e = 0.0;
+                    for (int i = 0; i < len; ++i)
+                    {
+                        const float a = out.getSample (0, period + i), b = out.getSample (0, nn * period + i);
+                        d += (double) (a - b) * (a - b); e += (double) a * a;
+                    }
+                    worstDb = std::max (worstDb, (float) (10.0 * std::log10 (d / std::max (e, 1.0e-20) + 1.0e-30)));
+                }
+                return worstDb;
+            };
+            const float alignedLevel = render (P::DstO1Level, 20.0f, 0, true), alignedMono = render (P::DstO1Level, 20.0f, 1, true);
+            const float alignedFilter = render (P::DstFxfCutoff, 20.0f, 0, true), alignedRaw = render (P::DstO1Level, 0.0f, 0, true);
+            const float plainDb = render (P::DstNone, 20.0f, 0, false), levelDb = render (P::DstO1Level, 20.0f, 0, false);
+            const float filterDb = render (P::DstFxfCutoff, 20.0f, 0, false);
+            const bool sameOk = alignedLevel <= -200.0f && alignedMono <= -200.0f && alignedFilter <= -200.0f && alignedRaw <= -200.0f
+                                && levelDb < plainDb + 6.0f && filterDb < plainDb + 6.0f;
+            if (! sameOk) ++failures;
+            auto db = [] (float v) { return v <= -200.0f ? juce::String ("identical") : juce::String (v, 1) + " dB"; };
+            std::cout << (sameOk ? "ok   " : "FAIL ") << "Resynth Level: every note the same. Notes at the same block position: Osc 1 Level " << db (alignedLevel)
+                      << " (Mono " << db (alignedMono) << ", Smooth 0 " << db (alignedRaw) << "), FX Filter Cutoff " << db (alignedFilter)
+                      << "; notes anywhere in the blocks: unmapped " << db (plainDb) << ", Osc 1 Level " << db (levelDb) << ", FX Filter Cutoff " << db (filterDb) << "\n";
+        }
     }
 
     // Resynth FM is rendered a block at a time: renderBlock with a phase-modulation array gives the same output as

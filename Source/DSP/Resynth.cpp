@@ -5,6 +5,7 @@
 
 namespace
 {
+constexpr double silentDb = -100.0;   // Resynth Level curve floor: below the lowest Floor knob setting, so it always reads as 0
 constexpr float imageGain = 0.15f;       // level of a fully bright image row
 constexpr float imageDbRange = 72.0f;    // black..white maps to -72..0 dB
 }
@@ -106,15 +107,79 @@ void ResynthData::computeLevels()
     for (int f = 0; f < numFrames; ++f)
         if (power[(size_t) f] > 0.0f)
             frameDb[(size_t) f] = juce::jmax (-200.0f, 10.0f * std::log10 (power[(size_t) f] / maxPower));
+
+    // running integrals for smoothedLevelDb (frame segments as above; the last segment is added when reading)
+    levelI.assign ((size_t) numFrames, 0.0);
+    levelJ.assign ((size_t) numFrames, 0.0);
+    const double dt = 1.0 / frameRate;
+    for (int f = 0; f + 1 < numFrames; ++f)
+    {
+        const double a = juce::jmax (silentDb, (double) frameDb[(size_t) f]), b = juce::jmax (silentDb, (double) frameDb[(size_t) f + 1]);
+        levelI[(size_t) f + 1] = levelI[(size_t) f] + (a + b) * dt * 0.5;
+        levelJ[(size_t) f + 1] = levelJ[(size_t) f] + levelI[(size_t) f] * dt + a * dt * dt * 0.5 + (b - a) * dt * dt / 6.0;
+    }
 }
 
-float ResynthData::levelDbAt (double t) const
+// The curve is linear between frames (frame f at f / frameRate) and runs from the last frame to the first (looped) or
+// holds the last frame over one more frame interval, so one period is numFrames / frameRate long.
+void ResynthData::levelIntegrals (double t, bool loop, double& I, double& J) const
 {
-    if (frameDb.empty()) return -200.0f;
-    const double fpos = juce::jlimit (0.0, (double) (numFrames - 1), t * frameRate);
-    const int a = (int) fpos, b = juce::jmin (a + 1, numFrames - 1);
-    const float k = (float) (fpos - a);
-    return frameDb[(size_t) a] + (frameDb[(size_t) b] - frameDb[(size_t) a]) * k;
+    const int F = numFrames;
+    const double dt = 1.0 / frameRate, P = F * dt;
+    auto L = [&] (int f) { return juce::jmax (silentDb, (double) frameDb[(size_t) f]); };
+    // within one period: the frame's integrals plus the part of the segment up to r
+    auto base = [&] (double r, double& bi, double& bj)
+    {
+        const int f = juce::jlimit (0, F - 1, (int) std::floor (r / dt));
+        const double u = juce::jlimit (0.0, dt, r - f * dt);
+        const double a = L (f), b = f + 1 < F ? L (f + 1) : (loop ? L (0) : L (F - 1));
+        bi = levelI[(size_t) f] + a * u + (b - a) * u * u / (2.0 * dt);
+        bj = levelJ[(size_t) f] + levelI[(size_t) f] * u + a * u * u * 0.5 + (b - a) * u * u * u / (6.0 * dt);
+    };
+    double IP, JP;
+    base (P, IP, JP);
+    if (loop)
+    {
+        // L(t + P) = L(t): I(t + kP) = I(r) + k IP, J(t + kP) = J(r) + k JP + IP (k r + P k (k - 1) / 2)
+        const double k = std::floor (t / P), r = t - k * P;
+        base (r, I, J);
+        I += k * IP;
+        J += k * JP + IP * (k * r + P * k * (k - 1.0) * 0.5);
+    }
+    else if (t < 0.0)
+    {
+        I = L (0) * t;
+        J = L (0) * t * t * 0.5;
+    }
+    else if (t <= P)
+    {
+        base (t, I, J);
+    }
+    else
+    {
+        const double s = t - P;
+        I = IP + silentDb * s;
+        J = JP + IP * s + silentDb * s * s * 0.5;
+    }
+}
+
+float ResynthData::smoothedLevelDb (double t, double smoothSec, bool loop) const
+{
+    if (frameDb.empty() || levelI.size() != frameDb.size()) return (float) silentDb;
+    // a triangle of half-width h is a box applied twice: (J(t + h) - 2 J(t) + J(t - h)) / h^2. Below 0.5 ms (a tenth of
+    // a frame) the curve is read directly, as the slope of I.
+    const double h = juce::jmax (smoothSec, 0.0005);
+    double Ia, Ja, Ib, Jb, Ic, Jc;
+    if (smoothSec < 0.0005)
+    {
+        levelIntegrals (t - h, loop, Ia, Ja);
+        levelIntegrals (t + h, loop, Ib, Jb);
+        return (float) ((Ib - Ia) / (2.0 * h));
+    }
+    levelIntegrals (t - h, loop, Ia, Ja);
+    levelIntegrals (t, loop, Ib, Jb);
+    levelIntegrals (t + h, loop, Ic, Jc);
+    return (float) ((Jc - 2.0 * Jb + Ja) / (h * h));
 }
 
 // ---- images: rows are harmonics of middle C (bottom = fundamental), columns are time, brightness is level ----

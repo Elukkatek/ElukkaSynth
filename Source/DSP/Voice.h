@@ -51,7 +51,7 @@ struct VoiceContext
     double ppq = 0.0;   // song position (beats) at the start of this block, while the host plays
     float rsSubLift = 0.0f, rsBassFreq = 120.0f;   // rsBassFreq is also every oscillator's Bass Mono crossover
     // Resynth Level source: attack/release in ms, gain in %, floor in dB
-    float rslAttack = 5.0f, rslRelease = 150.0f, rslGain = 100.0f, rslFloor = -48.0f;
+    float rslSmooth = 20.0f, rslGain = 100.0f, rslFloor = -48.0f;
     juce::ADSR::Parameters amp;
     FilterParams filter;
     juce::ADSR::Parameters filterEnv;
@@ -96,7 +96,8 @@ public:
     uint64_t age = 0;
     float envValue = 0.0f;
     float modValue[P::numMods] {};
-    float rsLevel = 0.0f;      // Resynth Level source (0..1)
+    float rsLevel = 0.0f;      // Resynth Level source (0..1): a function of the playhead alone, the same on every note
+    double rsSpeedLast = 1.0;  // the playhead's speed in the previous block (source seconds per second)
     double rsPlayTime = 0.0;   // resynth source position (seconds) used in the last block, for the UI
 
 private:

@@ -37,14 +37,15 @@ inline std::array<juce::dsp::IIR::Coefficients<float>::Ptr, 3> makeEqCoefficient
 }
 
 // 12 dB/oct Butterworth state-variable low or high pass for an effect's wet signal (stereo).
-// Bypassed when fully open (low pass >= 20 kHz, high pass <= 20 Hz).
+// Bypassed when fully open (low pass >= 20 kHz, high pass <= 20 Hz). While bypassed the filter keeps running at its
+// open edge, so when modulation moves the cutoff in, it continues from the signal's current state, not a stale one
+// (which popped).
 struct WetFilter
 {
     void set (double sr, float hz, bool isHighPass)
     {
         highPass = isHighPass;
         active = highPass ? hz > 20.5f : hz < 19999.0f;
-        if (! active) return;
         g = std::tan (juce::MathConstants<float>::pi * juce::jlimit (10.0f, (float) (sr * 0.45), hz) / (float) sr);
         a1 = 1.0f / (1.0f + g * (g + k));
         a2 = g * a1;
@@ -52,12 +53,12 @@ struct WetFilter
     }
     inline float process (float x, int c) noexcept
     {
-        if (! active) return x;
         const float v3 = x - ic2[c];
         const float v1 = a1 * ic1[c] + a2 * v3;
         const float v2 = ic2[c] + a2 * ic1[c] + a3 * v3;
         ic1[c] = 2.0f * v1 - ic1[c];
         ic2[c] = 2.0f * v2 - ic2[c];
+        if (! active) return x;
         return highPass ? x - k * v1 - v2 : v2;
     }
     void reset() { ic1[0] = ic1[1] = ic2[0] = ic2[1] = 0.0f; }
@@ -173,9 +174,71 @@ public:
         combWasOn = false;
         fxFilter.reset();
         fltWasOn = false;
+        haveLast = false;
     }
 
+    // Runs the chain. A control that changed since the previous call (modulation) moves to its new value across the
+    // block: the block is processed in steps of glideStep samples, each with the controls interpolated between the
+    // previous and the new values (frequencies on a log scale), so a modulated control never jumps by a whole block's
+    // change at once. With nothing changing, the block is processed in one piece, exactly as before.
     void process (float* L, float* R, int n, const FXParams& p, double bpm, const Order& order)
+    {
+        if (! haveLast || ! anyGlided (last, p) || n <= glideStep)
+        {
+            processChain (L, R, n, p, bpm, order);
+        }
+        else
+        {
+            const int steps = (n + glideStep - 1) / glideStep;
+            for (int k = 0, pos = 0; k < steps; ++k, pos += glideStep)
+            {
+                const int len = juce::jmin (glideStep, n - pos);
+                processChain (L + pos, R + pos, len, k == steps - 1 ? p : interpolate (last, p, (float) (k + 1) / (float) steps), bpm, order);
+            }
+        }
+        last = p;
+        haveLast = true;
+    }
+
+private:
+    static constexpr int glideStep = 16;
+    FXParams last;
+    bool haveLast = false;
+
+    // the continuous controls (frequencies separately: they glide on a log scale)
+    template <typename Fn> static void forEachLinear (const FXParams& a, const FXParams& b, Fn&& fn)
+    {
+        fn (a.distDrive, b.distDrive); fn (a.distMix, b.distMix); fn (a.combFb, b.combFb); fn (a.combMix, b.combMix);
+        fn (a.eqLow, b.eqLow); fn (a.eqMid, b.eqMid); fn (a.eqHigh, b.eqHigh); fn (a.eqLowQ, b.eqLowQ); fn (a.eqMidQ, b.eqMidQ); fn (a.eqHighQ, b.eqHighQ);
+        fn (a.dlyMs, b.dlyMs); fn (a.dlyFb, b.dlyFb); fn (a.dlyMix, b.dlyMix); fn (a.ottAmount, b.ottAmount); fn (a.ottSpeed, b.ottSpeed);
+        fn (a.rev.mix, b.rev.mix); fn (a.rev.decay, b.rev.decay); fn (a.rev.size, b.rev.size); fn (a.rev.tone, b.rev.tone); fn (a.rev.mod, b.rev.mod);
+        fn (a.fltRes, b.fltRes); fn (a.fltDrive, b.fltDrive);
+    }
+    template <typename Fn> static void forEachFreq (const FXParams& a, const FXParams& b, Fn&& fn)
+    {
+        fn (a.combFreq, b.combFreq); fn (a.combLp, b.combLp); fn (a.combHp, b.combHp); fn (a.eqLowF, b.eqLowF); fn (a.eqMidF, b.eqMidF);
+        fn (a.eqHighF, b.eqHighF); fn (a.dlyLp, b.dlyLp); fn (a.dlyHp, b.dlyHp); fn (a.fltCutoff, b.fltCutoff);
+    }
+    static bool anyGlided (const FXParams& a, const FXParams& b)
+    {
+        bool changed = false;
+        auto cmp = [&changed] (const float& x, const float& y) { changed |= x != y; };
+        forEachLinear (a, b, cmp);
+        forEachFreq (a, b, cmp);
+        return changed;
+    }
+    // b with its continuous controls moved t (0..1) of the way from a
+    static FXParams interpolate (const FXParams& a, const FXParams& b, float t)
+    {
+        FXParams r = b;
+        const char* base = reinterpret_cast<const char*> (&b);
+        auto at = [&r, base] (const float& field) -> float& { return *reinterpret_cast<float*> (reinterpret_cast<char*> (&r) + (reinterpret_cast<const char*> (&field) - base)); };
+        forEachLinear (a, b, [&] (const float& x, const float& y) { at (y) = x + (y - x) * t; });
+        forEachFreq (a, b, [&] (const float& x, const float& y) { at (y) = x > 0.0f && y > 0.0f ? x * std::pow (y / x, t) : y; });
+        return r;
+    }
+
+    void processChain (float* L, float* R, int n, const FXParams& p, double bpm, const Order& order)
     {
         for (int fx : order)
             switch (fx)
@@ -190,7 +253,7 @@ public:
                     combWasOn = p.combOn;
                     break;
                 case P::FxOtt:    if (p.ottOn) ott.process (L, R, n, p.ottAmount, p.ottSpeed); else for (auto& m : ott.meterDb) m = 0.0f; break;
-                case P::FxDist:   if (p.distOn) distortion (L, R, n, p); break;
+                case P::FxDist:   if (p.distOn) distortion (L, R, n, p); else distDriveNow = -1.0f; break;
                 case P::FxDelay:  if (p.dlyOn) delayLine (L, R, n, p, bpm); else smoothedDelay = -1.0f; break;
                 case P::FxReverb:
                     if (p.revOn)
@@ -249,6 +312,26 @@ private:
 
     void distortion (float* L, float* R, int n, const FXParams& p)
     {
+        // Drive and mix glide across the block to their new values, so modulating them never steps (a step in drive
+        // is a step in the waveform: a click). Unchanged values take the plain path below, exactly as before.
+        if (distDriveNow < 0.0f) { distDriveNow = p.distDrive; distMixNow = p.distMix; }
+        if (distDriveNow != p.distDrive || distMixNow != p.distMix)
+        {
+            const float dDrive = (p.distDrive - distDriveNow) / (float) n, dMix = (p.distMix - distMixNow) / (float) n;
+            for (int i = 0; i < n; ++i)
+            {
+                const float d = distDriveNow + dDrive * (float) (i + 1), mix = distMixNow + dMix * (float) (i + 1);
+                const float drive = 1.0f + d * d * 40.0f;
+                const float makeup = juce::jmin (1.0f, 1.0f / std::sqrt (drive) * 1.5f);
+                const float wl = shape (L[i] * drive, p.distType) * makeup;
+                const float wr = shape (R[i] * drive, p.distType) * makeup;
+                L[i] += (wl - L[i]) * mix;
+                R[i] += (wr - R[i]) * mix;
+            }
+            distDriveNow = p.distDrive;
+            distMixNow = p.distMix;
+            return;
+        }
         const float drive = 1.0f + p.distDrive * p.distDrive * 40.0f;
         const float makeup = 1.0f / std::sqrt (drive) * 1.5f;
         for (int i = 0; i < n; ++i)
@@ -376,6 +459,7 @@ private:
     float fltCutoff = -1.0f;   // gliding cutoff (Hz); < 0 = jump to the target
     bool fltWasOn = false;
     float combDelay = -1.0f;   // current (smoothed) comb delay in samples
+    float distDriveNow = -1.0f, distMixNow = 1.0f;   // gliding distortion drive and mix; drive < 0 = jump to the target
 
 public:
     OttCompressor ott;

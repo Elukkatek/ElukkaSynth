@@ -102,7 +102,7 @@ void ElukkaAudioProcessor::cacheParams()
     hmPrism = raw ("hm_prism"); hmPrismCenter = raw ("hm_prismCenter"); hmPrismWidth = raw ("hm_prismWidth");
     hmShimmer = raw ("hm_shimmer"); hmShimmerRate = raw ("hm_shimmerRate");
     hmTableSrc = raw ("hm_tableSrc"); hmTableAmt = raw ("hm_tableAmt");
-    rslAttack = raw ("rsl_attack"); rslRelease = raw ("rsl_release"); rslGain = raw ("rsl_gain"); rslFloor = raw ("rsl_floor");
+    rslSmooth = raw ("rsl_smooth"); rslGain = raw ("rsl_gain"); rslFloor = raw ("rsl_floor");
     rsTune = raw ("rs_tune"); rsGate = raw ("rs_gate"); rsLift = raw ("rs_lift"); rsSpeed = raw ("rs_speed"); rsSync = raw ("rs_sync"); rsBpm = raw ("rs_bpm");
     rsPos = raw ("rs_pos"); rsLoop = raw ("rs_loop");
     fxfOn = raw ("fxf_on"); fxfType = raw ("fxf_type"); fxfSlope = raw ("fxf_slope");
@@ -223,7 +223,7 @@ void ElukkaAudioProcessor::buildContext (double bpm)
     ctx.rsSubLift = rsSubLift->load(); ctx.rsBassFreq = rsBassFreq->load();
     ctx.rsPos = rsPos->load();
     ctx.rsLoop = on (rsLoop);
-    ctx.rslAttack = rslAttack->load(); ctx.rslRelease = rslRelease->load();
+    ctx.rslSmooth = rslSmooth->load();
     ctx.rslGain = rslGain->load(); ctx.rslFloor = rslFloor->load();
 
     ctx.filter = { idx (fltType), idx (fltSlope), fltCutoff->load(), fltRes->load(), fltEnv->load(), fltKey->load(), fltDrive->load() };
@@ -384,12 +384,11 @@ void ElukkaAudioProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
         src[P::modSrc[i]] = globalMods[i].process (m, shapes[i], num, sr, rng, locked);
         globalModValue[i] = src[P::modSrc[i]];
     }
-    float env = 0.0f, rsLevel = 0.0f;
+    float env = 0.0f;
     uint64_t newest = 0;
     for (auto& v : voices)
-        if (v.active && v.age >= newest) { newest = v.age; env = v.envValue; rsLevel = v.rsLevel; }
+        if (v.active && v.age >= newest) { newest = v.age; env = v.envValue; }
     src[P::SrcAmpEnv] = env;
-    src[P::SrcRsLevel] = rsLevel;
     src[P::SrcVel] = lastVelocity;
     src[P::SrcModWheel] = modWheel;
     src[P::SrcMacro1] = ctx.macro1;
@@ -418,6 +417,25 @@ void ElukkaAudioProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
 
     for (auto& v : voices)
         if (v.active) v.render (L, R, num, ctx);
+    // Resynth Level for the effects: the newest voice's, read after the voices updated it this chunk. When the newest
+    // voice changes (a new note, or the last one ending) the step from the old value fades out over 5 ms, so a mapped
+    // effect never jumps while the previous note still rings through it; after that it is the new note's curve exactly.
+    {
+        float rsLevel = 0.0f;
+        uint64_t newestRs = 0;
+        for (auto& v : voices)
+            if (v.active && v.age >= newestRs) { newestRs = v.age; rsLevel = v.rsLevel; }
+        // (a new note starts at the start of a chunk, so the fade starts at the note-on, whatever the chunk's length)
+        if (newestRs != rsNewestAge)
+        {
+            rsOffset = globalRsLevel - rsLevel;
+            rsNewestAge = newestRs;
+        }
+        rsOffset *= std::exp (-(float) num / (0.005f * (float) sr));
+        if (std::abs (rsOffset) < 1.0e-6f) rsOffset = 0.0f;
+        globalRsLevel = rsLevel + rsOffset;
+        src[P::SrcRsLevel] = globalRsLevel;
+    }
 
     float off[P::NumDst];
     evalMatrix (ctx, src, false, off);

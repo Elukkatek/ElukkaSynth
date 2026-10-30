@@ -109,7 +109,7 @@ private:
     MxRaw mxRaw[P::numMatrixSlots] {};
     std::atomic<float> *pMaster {}, *pPoly {}, *pGlide {}, *pBend {}, *pA {}, *pD {}, *pS {}, *pR {};
     std::atomic<float> *hmStretch {}, *hmOddEven {}, *hmCutoff {}, *hmRes {}, *hmPrism {}, *hmPrismCenter {}, *hmPrismWidth {}, *hmShimmer {}, *hmShimmerRate {}, *hmTableSrc {}, *hmTableAmt {};
-    std::atomic<float> *rslAttack {}, *rslRelease {}, *rslGain {}, *rslFloor {};
+    std::atomic<float> *rslSmooth {}, *rslGain {}, *rslFloor {};
     std::atomic<float> *rsTune {}, *rsGate {}, *rsLift {}, *rsSpeed {}, *rsSync {}, *rsBpm {}, *rsPos {}, *rsLoop {};
     std::atomic<float> *sqOn {}, *sqRate {}, *sqGate {}, *sqSlide {}, *sqAccent {};
     std::atomic<float> *distOn {}, *distType {}, *distDrive {}, *distMix {}, *combOn {}, *combFreq {}, *combFb {}, *combMix {};
@@ -123,6 +123,9 @@ private:
     std::atomic<float> *fltA {}, *fltD {}, *fltS {}, *fltR {}, *shRate {};   // shRate = sh_syncRate
     std::atomic<float> *ottOn {}, *ottAmount {}, *ottSpeed {}, *rsSubLift {}, *rsBassFreq {};
     std::atomic<float> *shSmooth {}, *shRetrig {};
+    float globalRsLevel = 0.0f;   // Resynth Level for the effects: the newest voice's, plus a fading step when it changes
+    float rsOffset = 0.0f;
+    uint64_t rsNewestAge = 0;
     float lastMasterGain = -1.0f;
 
     juce::NormalisableRange<float> destRanges[P::NumDst];

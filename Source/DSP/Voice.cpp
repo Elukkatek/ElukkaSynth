@@ -53,9 +53,10 @@ void Voice::start (int n, float vel, const VoiceContext& c, float glideSec, bool
             banks[i].alignHarmonics (oscs[i].getPhases(), oscs[i].getIncrements(), oscs[i].getBassPhase(), oscs[i].getBassIncrement(),
                                      c.harm.stretch, harmMoved[i]);
     }
-    if (! active) { drift.reset (*c.rng); rsLevel = 0.0f; }
+    if (! active) drift.reset (*c.rng);
     lastRsPos = juce::jlimit (0.0f, 1.0f, c.rsPos + lastOff[P::DstResPos]);
     rsTime = c.resynth != nullptr ? lastRsPos * c.resynth->durationSec : 0.0;
+    rsSpeedLast = c.rsSpeed * (c.rsSync ? c.hostBpm / juce::jmax (1.0f, c.rsBpm) : 1.0);
     posFading = false;
     std::fill (std::begin (fmOut), std::end (fmOut), 0.0f);
     active = true;
@@ -154,19 +155,20 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
             mp.smoothMs = applyMod (ranges[smoothDst], mp.smoothMs, lastOff[smoothDst]);
         modValue[i] = mods[i].process (mp, *c.shapes[i], n, sr, *c.rng, locked);
     }
-    // Resynth Level: the source's level at the playhead, Floor dB -> 0 and the loudest frame -> 1, times Gain,
-    // then smoothed with separate attack and release times
+    // Resynth Level: the source's smoothed level at the playhead, Floor dB -> 0 and the loudest frame -> 1, times Gain.
+    // It depends on the playhead alone (no state carried between blocks or notes), so every note follows the same curve.
+    // Read at the playhead time the block ends on: modulated controls ramp across the block to the value they are given,
+    // so this is the time that value belongs to (read at the block's start, it lagged by a block whose length depends
+    // on where the note fell in the host's buffer, and notes differed). The speed is the previous block's (modulation
+    // of the speed itself is evaluated below).
+    rsLevel = 0.0f;
+    if (c.resynth != nullptr)
     {
-        float target = 0.0f;
-        if (c.resynth != nullptr)
-        {
-            const double dur = c.resynth->durationSec;
-            const double t = c.rsLoop && dur > 0.0 ? std::fmod (std::fmod (rsTime, dur) + dur, dur) : rsTime;
-            if (t < dur && c.rslFloor < 0.0f)
-                target = juce::jlimit (0.0f, 1.0f, (1.0f - c.resynth->levelDbAt (t) / c.rslFloor) * c.rslGain * 0.01f);
-        }
-        const float ms = target > rsLevel ? c.rslAttack : c.rslRelease;
-        rsLevel = ms <= 0.0f ? target : rsLevel + (target - rsLevel) * (1.0f - std::exp (-(float) n / (ms * 0.001f * (float) sr)));
+        const double dur = c.resynth->durationSec;
+        const double tEnd = rsTime + rsSpeedLast * n / sr;
+        const double t = c.rsLoop && dur > 0.0 ? std::fmod (std::fmod (tEnd, dur) + dur, dur) : tEnd;
+        if (c.rslFloor < 0.0f)
+            rsLevel = juce::jlimit (0.0f, 1.0f, (1.0f - c.resynth->smoothedLevelDb (t, c.rslSmooth * 0.001, c.rsLoop) / c.rslFloor) * c.rslGain * 0.01f);
     }
     float src[P::NumSrc] {};
     for (int i = 0; i < P::numMods; ++i) src[P::modSrc[i]] = modValue[i];
@@ -257,6 +259,7 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
         const double speed = applyMod (ranges[P::DstRsSpeed], c.rsSpeed, off[P::DstRsSpeed])
                              * (c.rsSync ? c.hostBpm / juce::jmax (1.0f, bpm) : 1.0);
         rsBlock = speed * n / sr;
+        rsSpeedLast = speed;
         rsTime += rsBlock;
         if (c.rsLoop && dur > 0.0 && rsTime >= dur) rsTime = std::fmod (rsTime, dur);
         fadeTime += rsBlock;

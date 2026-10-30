@@ -259,7 +259,7 @@ private:
     juce::Label info, levelTitle, levelHelp;
     SpectrogramView view;
     Knob tune, gate, lift, subLift, speed, bpm, pos;
-    Knob lvlAttack, lvlRelease, lvlGain, lvlFloor;
+    Knob lvlSmooth, lvlGain, lvlFloor;
     RsLevelMeter levelMeter;
     Toggle sync, loop;
     juce::Label bpmLabel, bpmField;   // type the loop's BPM

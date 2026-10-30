@@ -327,8 +327,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     addF ("rs_pos", "Resynth Position", { 0.0f, 1.0f }, 0.0f);
     addB ("rs_loop", "Resynth Loop", true);
     // Resynth Level modulation source: follows the source's level at the playhead (Floor dB -> 0, loudest frame -> 1)
-    addF ("rsl_attack", "Level Attack", skewed (0.0f, 1000.0f, 50.0f), 5.0f, "ms");
-    addF ("rsl_release", "Level Release", skewed (0.0f, 2000.0f, 200.0f), 150.0f, "ms");
+    addF ("rsl_smooth", "Level Smooth", skewed (0.0f, 500.0f, 50.0f), 20.0f, "ms");
     addF ("rsl_gain", "Level Gain", { 0.0f, 400.0f, 0.1f }, 100.0f, "%");
     addF ("rsl_floor", "Level Floor", { -80.0f, -6.0f, 0.1f }, -48.0f, "dB");
 

@@ -41,7 +41,11 @@ struct ResynthData
     // Audio: RMS of the source around the frame; images: the summed level of the column's partials.
     std::vector<float> frameDb;
     void computeLevels();
-    float levelDbAt (double timeSec) const;   // interpolated between frames; -200 dB when empty
+    // The level (dB, -100 = silence) at source time t, averaged with a triangle window of half-width smoothSec centred
+    // on t (0 = the frames interpolated). A pure function of t: every note reading the same times gets the same curve.
+    // Looped: the curve repeats every numFrames / frameRate; otherwise it holds the first frame before the start and is
+    // silent after the end.
+    float smoothedLevelDb (double t, double smoothSec, bool loop) const;
     // Notes (audio only; images are one note at middle C). Every partial is tagged with the centre MIDI pitch of
     // the note it belongs to, per frame, so Tune can move each note of the source to the target note (see
     // tuneTarget). Unclaimed partials carry the nearest note in frequency; frames without notes carry the nearest
@@ -121,5 +125,8 @@ struct ResynthData
     float phaseAt (int s, double u) const;
 
 private:
+    // running integrals of the level curve (dB, floored at -100) at each frame: I = integral, J = integral of I
+    std::vector<double> levelI, levelJ;
+    void levelIntegrals (double t, bool loop, double& I, double& J) const;
     static std::shared_ptr<ResynthData> fromImagePixels (std::vector<uint8_t> pixels, int width, const juce::String& name);
 };
