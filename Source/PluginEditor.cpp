@@ -140,7 +140,7 @@ void ElukkaAudioProcessorEditor::resized()
     auto right = header.removeFromRight (210);
     layoutRow (right.reduced (0, 6), { &macro1, &macro2, &master }, 66, 2);
 
-    auto prow = header.removeFromRight (536).reduced (8, 0).withSizeKeepingCentre (520, 30);
+    auto prow = header.removeFromRight (656).reduced (8, 0).withSizeKeepingCentre (640, 34);
     prevBtn.setBounds (prow.removeFromLeft (28));
     prow.removeFromLeft (4);
     nextBtn.setBounds (prow.removeFromLeft (28));
