@@ -81,6 +81,14 @@ public:
 
     void beginBlock (int numSamples, float levelStart, float levelEnd);
 
+    // Longest block renderBlock() handles (the voice's control block).
+    static constexpr int maxBlock = 128;
+    // The whole block (n <= maxBlock samples): exactly the same output as n calls of tick (pm[k], l, r, rng) added to
+    // outL/outR, with the values tick() would return added to mono (nullptr = not needed). pm = per-sample phase
+    // modulation in cycles (nullptr = none). The voices are worked one at a time over the block, with tick()'s
+    // arithmetic, so the result is bit for bit the same; tick() is kept for FM loops.
+    void renderBlock (int n, const float* pm, float* outL, float* outR, float* mono, juce::Random& rng) noexcept;
+
     // One sample. pm = phase modulation in cycles. Adds stereo output to l/r, returns mono for FM.
     inline float tick (float pm, float& l, float& r, juce::Random& rng) noexcept
     {

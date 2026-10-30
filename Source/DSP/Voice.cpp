@@ -53,7 +53,7 @@ void Voice::start (int n, float vel, const VoiceContext& c, float glideSec, bool
             banks[i].alignHarmonics (oscs[i].getPhases(), oscs[i].getIncrements(), oscs[i].getBassPhase(), oscs[i].getBassIncrement(),
                                      c.harm.stretch, harmMoved[i]);
     }
-    if (! active) drift.reset (*c.rng);
+    if (! active) { drift.reset (*c.rng); rsLevel = 0.0f; }
     lastRsPos = juce::jlimit (0.0f, 1.0f, c.rsPos + lastOff[P::DstResPos]);
     rsTime = c.resynth != nullptr ? lastRsPos * c.resynth->durationSec : 0.0;
     posFading = false;
@@ -154,8 +154,23 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
             mp.smoothMs = applyMod (ranges[smoothDst], mp.smoothMs, lastOff[smoothDst]);
         modValue[i] = mods[i].process (mp, *c.shapes[i], n, sr, *c.rng, locked);
     }
+    // Resynth Level: the source's level at the playhead, Floor dB -> 0 and the loudest frame -> 1, times Gain,
+    // then smoothed with separate attack and release times
+    {
+        float target = 0.0f;
+        if (c.resynth != nullptr)
+        {
+            const double dur = c.resynth->durationSec;
+            const double t = c.rsLoop && dur > 0.0 ? std::fmod (std::fmod (rsTime, dur) + dur, dur) : rsTime;
+            if (t < dur && c.rslFloor < 0.0f)
+                target = juce::jlimit (0.0f, 1.0f, (1.0f - c.resynth->levelDbAt (t) / c.rslFloor) * c.rslGain * 0.01f);
+        }
+        const float ms = target > rsLevel ? c.rslAttack : c.rslRelease;
+        rsLevel = ms <= 0.0f ? target : rsLevel + (target - rsLevel) * (1.0f - std::exp (-(float) n / (ms * 0.001f * (float) sr)));
+    }
     float src[P::NumSrc] {};
     for (int i = 0; i < P::numMods; ++i) src[P::modSrc[i]] = modValue[i];
+    src[P::SrcRsLevel] = rsLevel;
     src[P::SrcAmpEnv] = envValue;
     src[P::SrcVel] = velocity;
     src[P::SrcModWheel] = c.modWheel;
@@ -274,7 +289,13 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
     const float prismWidth = applyMod (ranges[P::DstPrismWidth], h.prismWidth, off[P::DstPrismWidth]);
     const float shimmer = applyMod (ranges[P::DstShimmer], h.shimmer, off[P::DstShimmer]) * 0.01f;
     if (shimmer > 0.0f)
-        drift.advance (applyMod (ranges[P::DstShimmerRate], h.shimmerRate, off[P::DstShimmerRate]), n, sr, *c.rng);
+    {
+        // the additive oscillators read the drift of harmonics 2..64 only; the resynth partials read all of it
+        bool anyResynth = false;
+        for (auto& o : c.osc) anyResynth |= o.on && o.wave == P::WResynth;
+        drift.advance (applyMod (ranges[P::DstShimmerRate], h.shimmerRate, off[P::DstShimmerRate]), n, sr, *c.rng,
+                       anyResynth ? Mangle::Drift::size : PartialBank::numHarmonicSlots);
+    }
     const bool mangling = prism > 0.0f || shimmer > 0.0f;
     auto setMangle = [&] (PartialBank::BlockParams& bp)
     {
@@ -296,7 +317,6 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
     bool toFilter[P::numOscs] {};
     for (int i = 0; i < P::numOscs; ++i) toFilter[i] = c.osc[i].toFilter;
     float phaseOff[P::numOscs] {};
-    bool anyOn = false;
 
     // An oscillator used as an FM modulator must run even when its own level is zero.
     bool usedAsFm[P::numOscs] {};
@@ -320,7 +340,7 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
         const int base = P::DstO1Level + i * 4;
         const float target = o.on ? applyMod (ranges[base], o.level, off[base]) : 0.0f;
         if (target <= 0.0f && levels[i] <= 0.0f && ! (o.on && usedAsFm[i])) { fmOut[i] = 0.0f; continue; }
-        anyOn = running[i] = true;
+        running[i] = true;
 
         const int extra = P::DstO1Fine + i * 6;   // fine, phase, rand, voices, blend, width
         const float fine = applyMod (ranges[extra], o.fine, off[extra]);
@@ -450,27 +470,114 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
         levels[i] = target;
     }
 
-    // Sine banks that nothing phase-modulates (no FM into the oscillator) are rendered for the whole block at once.
-    bool blockBank[P::numOscs] {};
+    // An oscillator's mono output is only needed when another oscillator uses it as its FM source
+    bool needMono[P::numOscs] {};
     for (int i = 0; i < P::numOscs; ++i)
-    {
-        if (! running[i] || ! (useBank[i] || useBoth[i]) || (fmSrc[i] > 0 && fmAmt[i] != 0.0f)) continue;
-        blockBank[i] = true;
-        auto& o = bankBuf->out[i];
-        for (auto& b : o) std::fill_n (b, n, 0.0f);
-        banks[i].renderBlock (n, o[0], o[1], o[2], bankBuf->scratch);
-        if (useBank[i] && fadingThisBlock)
-            fadeBanks[(size_t) i].renderBlock (n, o[0], o[1], o[2], bankBuf->scratch);
-    }
+        for (int j = 0; j < P::numOscs; ++j)
+            needMono[i] |= running[j] && fmSrc[j] == i + 1 && fmAmt[j] != 0.0f;
+    // FM into the oscillator (from a running source, with an amount): its source must be rendered first
+    bool fmInput[P::numOscs] {};
+    for (int i = 0; i < P::numOscs; ++i)
+        fmInput[i] = running[i] && fmSrc[i] > 0 && fmAmt[i] != 0.0f && running[fmSrc[i] - 1];
+
+    // Every oscillator is rendered a block at a time, each after its FM source: its modulation is the source's mono
+    // output one sample late, as the sample-by-sample pass below has it. Oscillators in an FM loop (each other's
+    // source) need each other sample by sample; then everything takes that pass, as before.
+    int order[P::numOscs], numOrdered = 0, numRunning = 0;
+    bool ordered[P::numOscs] {};
+    for (int i = 0; i < P::numOscs; ++i) numRunning += running[i] ? 1 : 0;
+    for (int pass = 0; pass < P::numOscs; ++pass)
+        for (int i = 0; i < P::numOscs; ++i)
+            if (running[i] && ! ordered[i] && (! fmInput[i] || ordered[fmSrc[i] - 1]))
+            {
+                order[numOrdered++] = i;
+                ordered[i] = true;
+            }
 
     const float velGain = 0.4f * (0.4f + 0.6f * velocity);
+    auto& mix = bankBuf->mix;
+    for (auto& m : mix) std::fill_n (m, n, 0.0f);
 
-    for (int s = 0; s < n; ++s)
+    if (numOrdered == numRunning)
     {
-        const float env = amp.getNextSample();
-        float l = 0.0f, r = 0.0f, dryL = 0.0f, dryR = 0.0f;   // dry: oscillators that bypass the filter
-        if (anyOn)
+        float lastOut[P::numOscs];   // every oscillator's last sample of the previous block
+        std::copy (std::begin (fmOut), std::end (fmOut), std::begin (lastOut));
+        for (int idx = 0; idx < numOrdered; ++idx)
         {
+            const int i = order[idx];
+            const float* pm = nullptr;   // this oscillator's phase modulation per sample
+            if (fmInput[i])
+            {
+                const int src = fmSrc[i] - 1;
+                const float* srcMono = bankBuf->out[src][2];
+                auto& p = bankBuf->pm[i];
+                p[0] = lastOut[src] * fmAmt[i] * 2.0f;   // the source's last sample of the previous block
+                for (int s = 1; s < n; ++s) p[s] = srcMono[s - 1] * fmAmt[i] * 2.0f;
+                std::fill (p + n, p + controlBlock, 0.0f);   // PartialBank::renderBlock reads in groups of 8
+                pm = p;
+            }
+            float* outL = mix[toFilter[i] ? 0 : 2];
+            float* outR = mix[toFilter[i] ? 1 : 3];
+            float* mono = needMono[i] ? bankBuf->out[i][2] : nullptr;
+            if (mono != nullptr) std::fill_n (mono, n, 0.0f);
+            if (useBank[i])
+            {
+                banks[i].renderBlock (n, outL, outR, mono, bankBuf->scratch, pm);
+                if (fadingThisBlock) fadeBanks[(size_t) i].renderBlock (n, outL, outR, mono, bankBuf->scratch, pm);
+            }
+            else
+            {
+                const float* pmTable = nullptr;   // a wavetable's modulation includes the Phase offset
+                if (pm != nullptr || phaseOff[i] != 0.0f)
+                {
+                    for (int s = 0; s < n; ++s) bankBuf->pmTable[s] = (pm != nullptr ? pm[s] : 0.0f) + phaseOff[i];
+                    pmTable = bankBuf->pmTable;
+                }
+                oscs[i].renderBlock (n, pmTable, outL, outR, mono, *c.rng);
+                if (useBoth[i])
+                {
+                    // bank partials run at 1/sqrt2 (their mono output, for FM, is scaled back up)
+                    float* bankMono = nullptr;
+                    if (mono != nullptr) { bankMono = bankBuf->tmp; std::fill_n (bankMono, n, 0.0f); }
+                    banks[i].renderBlock (n, outL, outR, bankMono, bankBuf->scratch, pm);
+                    if (mono != nullptr)
+                        for (int s = 0; s < n; ++s) mono[s] += juce::MathConstants<float>::sqrt2 * bankMono[s];
+                }
+            }
+            fmOut[i] = mono != nullptr ? mono[n - 1] : 0.0f;
+        }
+    }
+    else
+    {
+        // Sine banks that nothing phase-modulates (no FM into the oscillator) are rendered for the whole block at once.
+        bool blockBank[P::numOscs] {};
+        for (int i = 0; i < P::numOscs; ++i)
+        {
+            if (! running[i] || ! (useBank[i] || useBoth[i]) || (fmSrc[i] > 0 && fmAmt[i] != 0.0f)) continue;
+            blockBank[i] = true;
+            auto& o = bankBuf->out[i];
+            for (auto& b : o) std::fill_n (b, n, 0.0f);
+            float* mono = needMono[i] ? o[2] : nullptr;
+            banks[i].renderBlock (n, o[0], o[1], mono, bankBuf->scratch);
+            if (useBank[i] && fadingThisBlock)
+                fadeBanks[(size_t) i].renderBlock (n, o[0], o[1], mono, bankBuf->scratch);
+        }
+
+        // Sine banks with FM are rendered for the whole block after the oscillator pass below records their phase
+        // modulation, unless another oscillator needs their output sample by sample as its own FM source.
+        bool deferBank[P::numOscs] {};
+        bool anyDeferred = false;
+        for (int i = 0; i < P::numOscs; ++i)
+        {
+            if (! running[i] || ! useBank[i] || blockBank[i]) continue;
+            deferBank[i] = ! needMono[i];
+            anyDeferred |= deferBank[i];
+        }
+
+        // Oscillator pass: the oscillators' sum per sample (FM needs them sample by sample)
+        for (int s = 0; s < n; ++s)
+        {
+            float l = 0.0f, r = 0.0f, dryL = 0.0f, dryR = 0.0f;   // dry: oscillators that bypass the filter
             float out[P::numOscs] {};
             for (int i = 0; i < P::numOscs; ++i)
             {
@@ -478,6 +585,7 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
                 float& oL = toFilter[i] ? l : dryL;
                 float& oR = toFilter[i] ? r : dryR;
                 const float pm = fmSrc[i] > 0 ? fmOut[fmSrc[i] - 1] * fmAmt[i] * 2.0f : 0.0f;
+                if (deferBank[i]) { bankBuf->pm[i][s] = pm; continue; }
                 if (blockBank[i])
                 {
                     const auto& o = bankBuf->out[i];
@@ -491,7 +599,34 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
                 if (useBank[i] && fadingThisBlock) out[i] += fadeBanks[(size_t) i].tick (pm, oL, oR);
             }
             std::copy (std::begin (out), std::end (out), std::begin (fmOut));
+            mix[0][s] = l; mix[1][s] = r; mix[2][s] = dryL; mix[3][s] = dryR;
         }
+        if (anyDeferred)
+        {
+            for (int i = 0; i < P::numOscs; ++i)
+            {
+                if (! deferBank[i]) continue;
+                auto& o = bankBuf->out[i];
+                for (auto& b : o) std::fill_n (b, n, 0.0f);
+                std::fill (bankBuf->pm[i] + n, bankBuf->pm[i] + controlBlock, 0.0f);   // renderBlock reads in groups of 8
+                banks[i].renderBlock (n, o[0], o[1], nullptr, bankBuf->scratch, bankBuf->pm[i]);   // deferred: no one needs its mono output
+                if (fadingThisBlock)
+                    fadeBanks[(size_t) i].renderBlock (n, o[0], o[1], nullptr, bankBuf->scratch, bankBuf->pm[i]);
+                const int side = toFilter[i] ? 0 : 2;
+                for (int s = 0; s < n; ++s) { mix[side][s] += o[0][s]; mix[side + 1][s] += o[1][s]; }
+                fmOut[i] = 0.0f;
+            }
+        }
+    }
+
+    // the filter's key tracking is constant over the block; without an envelope amount so is the whole cutoff
+    const float fltKeyTerm = fltKey * (pitch - 60.0f) / 12.0f;
+    const float fltStaticCutoff = fltCutoff * std::exp2 (fltKeyTerm);
+    for (int s = 0; s < n; ++s)
+    {
+        const float env = amp.getNextSample();
+        float l = mix[0][s], r = mix[1][s];
+        const float dryL = mix[2][s], dryR = mix[3][s];
         const float fe = filterEnv.getNextSample();
         if (filterOn)
         {
@@ -508,7 +643,7 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
             preDeclickR *= declickCoef;
             lastPreL = l;
             lastPreR = r;
-            filter.process (l, r, fltCutoff * std::exp2 (fltEnv * fe * 8.0f + fltKey * (pitch - 60.0f) / 12.0f));
+            filter.process (l, r, fltEnv == 0.0f ? fltStaticCutoff : fltCutoff * std::exp2 (fltEnv * fe * 8.0f + fltKeyTerm));
         }
         l += dryL;
         r += dryR;

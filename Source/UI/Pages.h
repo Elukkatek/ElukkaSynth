@@ -210,6 +210,24 @@ private:
     juce::TextButton resetGain { "Reset Levels" }, resetDepth { "Reset Depth" };
 };
 
+// Horizontal bar showing the Resynth Level modulation source (0..1).
+class RsLevelMeter : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    void setValue (float v) { if (std::abs (v - value) > 0.002f) { value = v; repaint(); } }
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        g.setColour (Col::panelHi);
+        g.fillRoundedRectangle (r, 3.0f);
+        g.setColour (Col::mod);
+        g.fillRoundedRectangle (r.withWidth (r.getWidth() * juce::jlimit (0.0f, 1.0f, value)), 3.0f);
+    }
+
+private:
+    float value = 0.0f;
+};
+
 class ResynthPage : public Page, public juce::FileDragAndDropTarget
 {
 public:
@@ -238,9 +256,11 @@ private:
     Panel sourcePanel { "SOURCE" }, playPanel { "PLAYBACK / TIME WARP" };
     juce::TextButton loadAudioBtn { "Load Audio..." }, loadImageBtn { "Load Image..." }, clearBtn { "Clear" };
     juce::TextButton detectBtn { "Use Detected BPM" }, doubleBtn { "BPM x2" }, halveBtn { "BPM / 2" }, useOsc1 { "Use on Osc 1" };
-    juce::Label info, help;
+    juce::Label info, levelTitle, levelHelp;
     SpectrogramView view;
     Knob tune, gate, lift, subLift, speed, bpm, pos;
+    Knob lvlAttack, lvlRelease, lvlGain, lvlFloor;
+    RsLevelMeter levelMeter;
     Toggle sync, loop;
     juce::Label bpmLabel, bpmField;   // type the loop's BPM
     std::unique_ptr<juce::FileChooser> chooser;

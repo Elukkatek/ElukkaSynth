@@ -59,6 +59,7 @@ public:
     std::atomic<float> uiOttDb[3] {};   // OTT gain change per band (dB) for the meters
     std::atomic<float> uiSh { 0.0f };
     std::atomic<bool> uiPlaying { false };   // any voice sounding (the mod displays only move while notes play)
+    std::atomic<float> uiRsLevel { 0.0f };  // Resynth Level source of the newest voice (0..1)
     std::atomic<float> uiRsPos { -1.0f };   // resynth playback position (0..1) of the newest voice, -1 = not playing
 
     // Live values for the UI
@@ -90,6 +91,7 @@ private:
     MxRaw mxRaw[P::numMatrixSlots] {};
     std::atomic<float> *pMaster {}, *pPoly {}, *pGlide {}, *pBend {}, *pA {}, *pD {}, *pS {}, *pR {};
     std::atomic<float> *hmStretch {}, *hmOddEven {}, *hmCutoff {}, *hmRes {}, *hmPrism {}, *hmPrismCenter {}, *hmPrismWidth {}, *hmShimmer {}, *hmShimmerRate {}, *hmTableSrc {}, *hmTableAmt {};
+    std::atomic<float> *rslAttack {}, *rslRelease {}, *rslGain {}, *rslFloor {};
     std::atomic<float> *rsTune {}, *rsGate {}, *rsLift {}, *rsSpeed {}, *rsSync {}, *rsBpm {}, *rsPos {}, *rsLoop {};
     std::atomic<float> *sqOn {}, *sqRate {}, *sqGate {}, *sqSlide {}, *sqAccent {};
     std::atomic<float> *distOn {}, *distType {}, *distDrive {}, *distMix {}, *combOn {}, *combFreq {}, *combFb {}, *combMix {};

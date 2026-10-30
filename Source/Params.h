@@ -52,9 +52,9 @@ inline int dlyDivFromOld (int old) { static const int map[] { 0, 2, 1, 5, 3, 7, 
 
 // Modulation sources
 inline const juce::StringArray modSources { "None", "Mod 1", "Mod 2", "Amp Env", "Velocity", "Mod Wheel",
-                                            "Macro 1", "Macro 2", "Seq Accent", "Key", "S&H", "Mod 3" };
-// Mod 3 was added later: appended so saved matrix settings keep their meaning
-enum Src { SrcNone, SrcMod1, SrcMod2, SrcAmpEnv, SrcVel, SrcModWheel, SrcMacro1, SrcMacro2, SrcAccent, SrcKey, SrcSH, SrcMod3, NumSrc };
+                                            "Macro 1", "Macro 2", "Seq Accent", "Key", "S&H", "Mod 3", "Resynth Level" };
+// Mod 3 and Resynth Level were added later: appended so saved matrix settings keep their meaning
+enum Src { SrcNone, SrcMod1, SrcMod2, SrcAmpEnv, SrcVel, SrcModWheel, SrcMacro1, SrcMacro2, SrcAccent, SrcKey, SrcSH, SrcMod3, SrcRsLevel, NumSrc };
 constexpr int numMods = 3;   // mod units (LFO / S&H / envelope), each with its own shape
 inline constexpr int modSrc[numMods] { SrcMod1, SrcMod2, SrcMod3 };
 
@@ -326,6 +326,11 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     addF ("rs_bpm", "Resynth Source BPM", { 40.0f, 240.0f, 0.01f }, 120.0f);
     addF ("rs_pos", "Resynth Position", { 0.0f, 1.0f }, 0.0f);
     addB ("rs_loop", "Resynth Loop", true);
+    // Resynth Level modulation source: follows the source's level at the playhead (Floor dB -> 0, loudest frame -> 1)
+    addF ("rsl_attack", "Level Attack", skewed (0.0f, 1000.0f, 50.0f), 5.0f, "ms");
+    addF ("rsl_release", "Level Release", skewed (0.0f, 2000.0f, 200.0f), 150.0f, "ms");
+    addF ("rsl_gain", "Level Gain", { 0.0f, 400.0f, 0.1f }, 100.0f, "%");
+    addF ("rsl_floor", "Level Floor", { -80.0f, -6.0f, 0.1f }, -48.0f, "dB");
 
     // Sequencer
     addB ("sq_on", "Sequencer On", false);

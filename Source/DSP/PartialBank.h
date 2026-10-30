@@ -90,11 +90,12 @@ public:
         float sumL[maxBlock], sumR[maxBlock], sumM[maxBlock], bass[maxBlock];
         float uniL[maxUnison][maxBlock], uniR[maxUnison][maxBlock];
     };
-    // The whole block (n <= maxBlock samples) without phase modulation: the same output as n calls of tick (0, l, r)
-    // (to float rounding), added to outL/outR, with the values tick() would return added to mono. Each partial's
-    // unison sines are computed 4 samples at a time with a polynomial sine; tick() is kept for FM, where the
-    // modulator's output is only known sample by sample.
-    void renderBlock (int n, float* outL, float* outR, float* mono, Scratch& scratch) noexcept;
+    // The whole block (n <= maxBlock samples): the same output as n calls of tick (pm[k], l, r) (to about 1e-6),
+    // added to outL/outR, with the values tick() would return added to mono (nullptr = not needed, which saves work).
+    // pm = per-sample phase modulation in cycles of the fundamental (nullptr = none; read up to n rounded up to 8).
+    // Each partial's unison sines are rotating phasors computed 8 samples at a time (see renderPartial); tick() is
+    // kept for FM whose modulator needs this bank's own output sample by sample.
+    void renderBlock (int n, float* outL, float* outR, float* mono, Scratch& scratch, const float* pm = nullptr) noexcept;
 
     // One sample. pm = phase modulation in cycles of the fundamental. Adds stereo output, returns mono for FM.
     inline float tick (float pm, float& l, float& r) noexcept
@@ -186,6 +187,11 @@ public:
     void restart();
 
 private:
+    struct Slot;
+    // One partial's unison sines over a block, added into the scratch sums (Mod: phase modulated; Wide: with a stereo
+    // phase; Mono: the mono sum too)
+    template <bool Mod, bool Wide, bool Mono>
+    void renderPartial (const Slot& sl, const float* ph, int n, const float* pm, Scratch& sc) noexcept;
     float beginBlock (const BlockParams& p, int n, float levelStart, float levelEnd);   // returns the Nyquist limit
     // startPhase >= 0: if the partial (re)starts from silence this block, it starts at this phase (cycles)
     void setSlot (int s, float f, float h, float a, float pan, const BlockParams& p, float nyquist, float startPhase = -1.0f,
@@ -249,6 +255,8 @@ private:
     static std::array<float, noiseSize> noiseWindow;
     static std::array<float, noiseSize / 2> log2Bin;   // band position of bin k relative to bin 1 (bands per octave * log2 k)
     static std::array<float, 512> unitCos, unitSin;    // random unit vectors by table
+    static std::array<float, numBands> bandCentreHz;   // ResynthData::noiseBandCentre (b)
+    static std::array<float, numBands> bandMidi;       // ...as a MIDI note
     const FFTBank* noiseFft = nullptr;
     bool noiseOn = false;
     int noiseQuietSamples = 0;

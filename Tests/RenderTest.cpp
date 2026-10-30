@@ -3164,6 +3164,125 @@ int main (int argc, char** argv)
                   << juce::String (globalSwing, 1) << " dB (global); shape saved, old saves and presets reset it (" << (shapeOk ? "yes" : "no") << ")\n";
     }
 
+    // Resynth Level: a modulation source following the source's level at the playhead. The source is a tone at full level
+    // for 0.5 s, then 24 dB quieter for 0.5 s (looped). With Floor -48 dB the loud half reads 1 and the quiet half 0.5;
+    // Gain 200 % lifts the quiet half to 1; a slow release holds the level up after the drop; mapped to Osc 1 Level
+    // (amount -1) the output gets quieter where the source is loud.
+    {
+        const int half = (int) (0.5 * sr);
+        juce::AudioBuffer<float> steps (1, 2 * half);
+        for (int i = 0; i < 2 * half; ++i)
+            steps.setSample (0, i, (i < half ? 0.5f : 0.5f * juce::Decibels::decibelsToGain (-24.0f)) * std::sin (juce::MathConstants<float>::twoPi * 220.0f * (float) i / (float) sr));
+        auto data = ResynthData::fromAudio (steps, sr, "steps");
+        // Resynth Level of the newest voice at the given times (s) after the note starts, and the output RMS per 0.5 s half
+        auto run = [&] (float gain, float releaseMs, int mapDst, std::vector<double> times, std::vector<float>& levels, float* rmsHalves)
+        {
+            auto qp = std::make_unique<ElukkaAudioProcessor>();
+            auto& q = *qp;
+            q.setPlayConfigDetails (0, 2, sr, block);
+            setP (q, "o1_wave", (float) P::WSine); setP (q, "o1_level", 0.5f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f);
+            setP (q, "rs_sync", 0.0f); setP (q, "rs_speed", 1.0f); setP (q, "rs_loop", 1.0f);
+            setP (q, "rsl_attack", 0.0f); setP (q, "rsl_release", releaseMs); setP (q, "rsl_gain", gain); setP (q, "rsl_floor", -48.0f);
+            if (mapDst != P::DstNone) { setP (q, "mx1_src", (float) P::SrcRsLevel); setP (q, "mx1_dst", (float) mapDst); setP (q, "mx1_amt", -1.0f); }
+            q.setResynth (data);
+            q.prepareToPlay (sr, block);
+            juce::AudioBuffer<float> buf (2, block);
+            double sumSq[2] {};
+            size_t next = 0;
+            for (int pos = 0; pos < 2 * half; pos += block)
+            {
+                juce::MidiBuffer midi;
+                if (pos == 0) midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                buf.clear();
+                q.processBlock (buf, midi);
+                for (int i = 0; i < block; ++i) sumSq[(pos + i) < half ? 0 : 1] += (double) buf.getSample (0, i) * buf.getSample (0, i);
+                if (next < times.size() && pos + block >= (int) (times[next] * sr)) { levels.push_back (q.uiRsLevel.load()); ++next; }
+            }
+            for (int h = 0; h < 2; ++h) rmsHalves[h] = (float) std::sqrt (sumSq[h] / half);
+        };
+        std::vector<float> plain, lifted, slow;
+        float rms[2], rmsMapped[2];
+        run (100.0f, 0.0f, P::DstNone, { 0.25, 0.75 }, plain, rms);
+        run (200.0f, 0.0f, P::DstNone, { 0.25, 0.75 }, lifted, rms);
+        run (100.0f, 300.0f, P::DstNone, { 0.52 }, slow, rms);
+        std::vector<float> unused;
+        run (100.0f, 0.0f, P::DstO1Level, {}, unused, rmsMapped);
+        // unmapped, Osc 1 plays at the same level in both halves; mapped, the loud half (level 1) is turned fully down
+        // and the quiet half (level 0.5) half way
+        const float mappedDb = juce::Decibels::gainToDecibels (rmsMapped[1] / std::max (rmsMapped[0], 1.0e-9f));
+        const bool ok = plain.size() == 2 && lifted.size() == 2 && slow.size() == 1
+                        && std::abs (plain[0] - 1.0f) < 0.05f && std::abs (plain[1] - 0.5f) < 0.05f
+                        && lifted[0] > 0.95f && lifted[1] > 0.95f && slow[0] > 0.85f && mappedDb > 12.0f
+                        && P::modSources[P::SrcRsLevel] == "Resynth Level";
+        if (! ok) ++failures;
+        std::cout << (ok ? "ok   " : "FAIL ") << "Resynth Level: loud half " << (plain.size() == 2 ? juce::String (plain[0], 2) : "?") << ", 24 dB quieter half "
+                  << (plain.size() == 2 ? juce::String (plain[1], 2) : "?") << " (Floor -48 dB); Gain 200 %: " << (lifted.size() == 2 ? juce::String (lifted[1], 2) : "?")
+                  << "; 20 ms after the drop with 300 ms release: " << (slow.size() == 1 ? juce::String (slow[0], 2) : "?")
+                  << "; mapped to Osc 1 Level the quiet half is " << juce::String (mappedDb, 1) << " dB louder\n";
+    }
+
+    // Resynth FM is rendered a block at a time: renderBlock with a phase-modulation array gives the same output as
+    // tick() sample by sample (3 unison voices, a source with several partials, a strong 330 Hz modulator)
+    {
+        const int len = (int) sr;
+        juce::AudioBuffer<float> chord (2, len);
+        for (int i = 0; i < len; ++i)
+        {
+            float v = 0.0f;
+            for (float f : { 220.0f, 277.2f, 329.6f, 440.0f, 660.0f }) v += 0.1f * std::sin (juce::MathConstants<float>::twoPi * f * (float) i / (float) sr);
+            chord.setSample (0, i, v);
+            chord.setSample (1, i, v * 0.7f);
+        }
+        auto data = ResynthData::fromAudio (chord, sr, "chord");
+        // returns the largest difference in dB of the peak; fm = false: no phase modulation (the renderers' own rounding)
+        float peak = 0.0f, monoDiff = 0.0f;
+        auto compare = [&] (bool fm)
+        {
+            auto a = std::make_unique<PartialBank>(), b = std::make_unique<PartialBank>();
+            auto scratch = std::make_unique<PartialBank::Scratch>();
+            juce::Random rng (3);
+            a->prepare (sr);
+            a->resetPhases (3, 0, 0.0f, 0.0f, rng);
+            *b = *a;
+            PartialBank::BlockParams bp;
+            bp.unison = 3; bp.detuneCents = 15.0f; bp.f0 = 261.63f;
+            if (fm) { bp.fmModHz = 330.0f; bp.fmDevPerRatio = 0.6f * 2.0f * juce::MathConstants<float>::twoPi * 330.0f; }
+            const auto gain = [] (float, float) { return 2.5f; };
+            constexpr int n = Voice::controlBlock;
+            float pm[n], aL[n], aR[n], bL[n], bR[n], bM[n];
+            float maxDiff = 0.0f;
+            peak = monoDiff = 0.0f;
+            double t = 0.0;
+            for (int blk = 0; blk < (int) (0.8 * sr) / n; ++blk)
+            {
+                bp.timeSec = t; bp.blockSec = n / sr;
+                a->setBlock (*data, bp, gain, n, 1.0f, 1.0f);
+                b->setBlock (*data, bp, gain, n, 1.0f, 1.0f);
+                for (int k = 0; k < n; ++k) pm[k] = fm ? 1.2f * std::sin (juce::MathConstants<float>::twoPi * 330.0f * (float) ((blk * n + k) / sr)) : 0.0f;
+                std::fill_n (bL, n, 0.0f); std::fill_n (bR, n, 0.0f); std::fill_n (bM, n, 0.0f);
+                if (fm) b->renderBlock (n, bL, bR, bM, *scratch, pm);
+                else    b->renderBlock (n, bL, bR, bM, *scratch);
+                for (int k = 0; k < n; ++k)
+                {
+                    aL[k] = aR[k] = 0.0f;
+                    const float m = a->tick (pm[k], aL[k], aR[k]);
+                    maxDiff = std::max ({ maxDiff, std::abs (aL[k] - bL[k]), std::abs (aR[k] - bR[k]) });
+                    monoDiff = std::max (monoDiff, std::abs (m - bM[k]));
+                    peak = std::max ({ peak, std::abs (aL[k]), std::abs (aR[k]) });
+                }
+                t += n / sr;
+            }
+            return juce::Decibels::gainToDecibels (maxDiff / std::max (peak, 1.0e-9f), -200.0f);
+        };
+        const float plainDb = compare (false);
+        const float diffDb = compare (true);
+        const bool ok = peak > 0.05f && diffDb < -75.0f && monoDiff < 1.0e-3f;
+        if (! ok) ++failures;
+        std::cout << (ok ? "ok   " : "FAIL ") << "Resynth FM block render: matches the per-sample render to " << juce::String (diffDb, 1)
+                  << " dB of the peak (" << juce::String (peak, 3) << "), FM output to " << juce::String (monoDiff, 6)
+                  << "; without FM the two renderers differ by " << juce::String (plainDb, 1) << " dB\n";
+    }
+
     // Cutoff knobs (voice filter and FX filter) are logarithmic: every octave takes the same knob distance, 20 Hz at 0,
     // 632 Hz in the middle, 20 kHz at the end; values survive the round trip
     {

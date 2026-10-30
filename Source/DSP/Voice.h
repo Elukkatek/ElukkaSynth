@@ -50,6 +50,8 @@ struct VoiceContext
     bool hostPlaying = false;
     double ppq = 0.0;   // song position (beats) at the start of this block, while the host plays
     float rsSubLift = 0.0f, rsBassFreq = 120.0f;   // rsBassFreq is also every oscillator's Bass Mono crossover
+    // Resynth Level source: attack/release in ms, gain in %, floor in dB
+    float rslAttack = 5.0f, rslRelease = 150.0f, rslGain = 100.0f, rslFloor = -48.0f;
     juce::ADSR::Parameters amp;
     FilterParams filter;
     juce::ADSR::Parameters filterEnv;
@@ -94,6 +96,7 @@ public:
     uint64_t age = 0;
     float envValue = 0.0f;
     float modValue[P::numMods] {};
+    float rsLevel = 0.0f;      // Resynth Level source (0..1)
     double rsPlayTime = 0.0;   // resynth source position (seconds) used in the last block, for the UI
 
 private:
@@ -127,10 +130,14 @@ private:
     float fmOut[P::numOscs] {};
     // Sine banks rendered a block at a time (when nothing phase-modulates them): their left/right/mono output.
     // Allocated in prepare() (processors live on the stack in tests).
-    static_assert (controlBlock <= PartialBank::maxBlock, "renderBlock handles one control block");
+    static_assert (controlBlock <= PartialBank::maxBlock && controlBlock <= SpectralOsc::maxBlock, "renderBlock handles one control block");
     struct BankBuffers
     {
         float out[P::numOscs][3][controlBlock];
+        float pm[P::numOscs][controlBlock];   // phase modulation per oscillator (FM), in cycles of the fundamental
+        float pmTable[controlBlock];          // the same plus the Phase offset, for a wavetable
+        float tmp[controlBlock];              // a bank's mono output while the wavetable's is in out[i][2]
+        float mix[4][controlBlock];           // oscillator sum per sample: to the filter L/R, bypassing it L/R
         PartialBank::Scratch scratch;
     };
     std::unique_ptr<BankBuffers> bankBuf;

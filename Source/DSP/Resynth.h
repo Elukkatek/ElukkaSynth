@@ -37,6 +37,11 @@ struct ResynthData
     double durationSec = 0.0;
     double detectedBpm = 120.0;
     float maxAmp = 1.0f;         // loudest partial, used by the Lift control
+    // Level of every frame in dB relative to the loudest frame (0 dB), for the Resynth Level modulation source.
+    // Audio: RMS of the source around the frame; images: the summed level of the column's partials.
+    std::vector<float> frameDb;
+    void computeLevels();
+    float levelDbAt (double timeSec) const;   // interpolated between frames; -200 dB when empty
     // Notes (audio only; images are one note at middle C). Every partial is tagged with the centre MIDI pitch of
     // the note it belongs to, per frame, so Tune can move each note of the source to the target note (see
     // tuneTarget). Unclaimed partials carry the nearest note in frequency; frames without notes carry the nearest
@@ -102,6 +107,16 @@ struct ResynthData
 
     // Mean frequency of slot s over the source time span [u0, u1] (seconds), from the interval frequencies.
     float meanFreq (int s, double u0, double u1) const;
+    // The same split in two, for every slot of a block: the frames and their weights (seconds) that meanFreq integrates
+    // over for [u0, u1], then the mean for a slot. meanFreqSpan returns the count, or 0 when meanFreq must be used
+    // (an empty span, or one longer than maxN frames).
+    int meanFreqSpan (double u0, double u1, int* frames, double* weights, int maxN) const;
+    float meanFreqOver (int s, const int* frames, const double* weights, int count, double u0, double u1) const
+    {
+        double sum = 0.0;
+        for (int i = 0; i < count; ++i) sum += (double) freq[(size_t) frames[i] * (size_t) numSlots + (size_t) s] * weights[i];
+        return (float) (sum / (u1 - u0));
+    }
     // Phase (cycles) of slot s at source time u, from the nearest frame where the partial exists; -1 if none.
     float phaseAt (int s, double u) const;
 

@@ -32,6 +32,28 @@ float ResynthData::meanFreq (int s, double u0, double u1) const
     return (float) (sum / (u1 - u0));
 }
 
+int ResynthData::meanFreqSpan (double u0, double u1, int* frames, double* weights, int maxN) const
+{
+    const int F = numFrames;
+    if (F <= 0 || u1 <= u0 + 1.0e-9) return 0;
+    const double fr = frameRate;
+    int count = 0;
+    int f = juce::jmax (0, (int) std::floor (u0 * fr));
+    while (true)
+    {
+        const double a = juce::jmax (u0, f / fr), b = juce::jmin (u1, (f + 1) / fr);
+        if (b > a)
+        {
+            if (count == maxN) return 0;
+            frames[count] = juce::jmin (f, F - 1);
+            weights[count++] = b - a;
+        }
+        if ((f + 1) / fr >= u1 || f >= F - 1) break;
+        ++f;
+    }
+    return count;
+}
+
 float ResynthData::phaseAt (int s, double u) const
 {
     if (phase.empty() || numFrames <= 0) return -1.0f;
@@ -43,6 +65,56 @@ float ResynthData::phaseAt (int s, double u) const
     else if (amp[ib] > 0.0f) x = phase[ib] - (float) (b / frameRate - u) * freq[ia];   // freq[a] was filled from frame b
     else return -1.0f;
     return x - std::floor (x);
+}
+
+void ResynthData::computeLevels()
+{
+    frameDb.assign ((size_t) numFrames, -200.0f);
+    float maxPower = 1.0e-20f;
+    std::vector<float> power ((size_t) numFrames, 0.0f);
+    const int len = sourceAudio.getNumSamples(), channels = sourceAudio.getNumChannels();
+    if (! isImage && len > 0 && channels > 0)
+    {
+        // mean power over the two hops around the frame centre, both channels
+        const int hop = juce::jmax (1, (int) std::lround (sourceRate / frameRate));
+        for (int f = 0; f < numFrames; ++f)
+        {
+            const int a = juce::jmax (0, f * hop - hop), b = juce::jmin (len, f * hop + hop);
+            double sum = 0.0;
+            for (int ch = 0; ch < channels; ++ch)
+            {
+                const float* x = sourceAudio.getReadPointer (ch);
+                for (int i = a; i < b; ++i) sum += (double) x[i] * x[i];
+            }
+            power[(size_t) f] = b > a ? (float) (sum / ((double) (b - a) * channels)) : 0.0f;
+        }
+    }
+    else
+    {
+        for (int f = 0; f < numFrames; ++f)
+        {
+            double sum = 0.0;
+            for (int s = 0; s < numSlots; ++s)
+            {
+                const float a = amp[(size_t) f * (size_t) numSlots + (size_t) s];
+                sum += (double) a * a;
+            }
+            power[(size_t) f] = (float) sum;
+        }
+    }
+    for (auto p : power) maxPower = juce::jmax (maxPower, p);
+    for (int f = 0; f < numFrames; ++f)
+        if (power[(size_t) f] > 0.0f)
+            frameDb[(size_t) f] = juce::jmax (-200.0f, 10.0f * std::log10 (power[(size_t) f] / maxPower));
+}
+
+float ResynthData::levelDbAt (double t) const
+{
+    if (frameDb.empty()) return -200.0f;
+    const double fpos = juce::jlimit (0.0, (double) (numFrames - 1), t * frameRate);
+    const int a = (int) fpos, b = juce::jmin (a + 1, numFrames - 1);
+    const float k = (float) (fpos - a);
+    return frameDb[(size_t) a] + (frameDb[(size_t) b] - frameDb[(size_t) a]) * k;
 }
 
 // ---- images: rows are harmonics of middle C (bottom = fundamental), columns are time, brightness is level ----
@@ -92,6 +164,7 @@ std::shared_ptr<ResynthData> ResynthData::fromImagePixels (std::vector<uint8_t> 
     for (int x = 0; x < width; ++x) d->frameNotes[(size_t) x * maxNotesPerFrame] = 60.0f;
     d->firstNoteMidi = 60.0f;
     d->imagePixels = std::move (pixels);
+    d->computeLevels();
     return d;
 }
 

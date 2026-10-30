@@ -69,7 +69,8 @@ public:
         }
     }
 
-    void advance (float rateHz, int numSamples, double sampleRate, juce::Random& rng)
+    // used: how many of the values will be read (every walk advances regardless, so the random sequence is the same)
+    void advance (float rateHz, int numSamples, double sampleRate, juce::Random& rng, int used = size)
     {
         const float step = rateHz * (float) numSamples / (float) sampleRate;
         for (int i = 0; i < size; ++i)
@@ -81,7 +82,8 @@ public:
                 prev[i] = next[i];
                 next[i] = rng.nextFloat() * 2.0f - 1.0f;
             }
-            value[i] = prev[i] + (next[i] - prev[i]) * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::pi * phase[i]));
+            if (i < used)
+                value[i] = prev[i] + (next[i] - prev[i]) * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::pi * phase[i]));
         }
     }
 

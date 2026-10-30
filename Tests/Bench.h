@@ -109,6 +109,17 @@ inline std::vector<Scenario> scenarios()
     v.push_back ({ "rs-4-uni4-30s", four, [] (auto& p) { resynth (p, 4); }, 0, 30.0 });
     v.push_back ({ "rs-8-retrigger-125ms", eight, [] (auto& p) { resynth (p, 2); setP (p, "ampR", 0.3f); }, 0, 12.0, 12 });
     v.push_back ({ "saw-8-uni7-retrigger-125ms", eight, [] (auto& p) { saw (p, 0, 7); setP (p, "ampR", 0.3f); }, -1, 12.0, 12 });
+    // FM (the default chain Osc 3 -> Osc 2 -> Osc 1), modulation that changes the spectrum every block, filter envelope
+    v.push_back ({ "fm-3osc-8", eight, [] (auto& p) { saw (p); setP (p, P::osc (1, "level"), 0.3f); setP (p, P::osc (2, "level"), 0.2f);
+                                                     setP (p, P::osc (0, "fmAmt"), 0.3f); setP (p, P::osc (1, "fmAmt"), 0.2f); } });
+    v.push_back ({ "rs-4-fm", four, [] (auto& p) { resynth (p); setP (p, P::osc (0, "fmAmt"), 0.3f); }, 0 });
+    v.push_back ({ "3osc-8-uni7-vibrato", eight, [] (auto& p) { saw (p, 0, 7); saw (p, 1, 7, 0.6f); saw (p, 2, 7, 0.5f);
+                                                               setP (p, P::mx (0, "src"), (float) P::SrcMod1); setP (p, P::mx (0, "dst"), (float) P::DstO1Pitch);
+                                                               setP (p, P::mx (0, "amt"), 0.01f); setP (p, P::mod (0, "rate"), 5.0f); } });
+    v.push_back ({ "saw-8-uni7-harm-cutoff-lfo", eight, [] (auto& p) { saw (p, 0, 7); setP (p, "hm_cutoff", 3000.0f);
+                                                                      setP (p, P::mx (0, "src"), (float) P::SrcMod2); setP (p, P::mx (0, "dst"), (float) P::DstCutoff);
+                                                                      setP (p, P::mx (0, "amt"), 0.3f); setP (p, P::mod (1, "rate"), 3.0f); } });
+    v.push_back ({ "saw-8-uni7-filter-env", eight, [] (auto& p) { saw (p, 0, 7); setP (p, "flt_cutoff", 800.0f); setP (p, "flt_env", 0.6f); setP (p, "flt_D", 1.0f); } });
     v.push_back ({ "worst-rs8u8+saw7+filter+fx", eight, [] (auto& p) { resynth (p, 8); saw (p, 1, 7, 0.5f); filterLfo (p); allFx (p);
                                                                          setP (p, "rs_tune", 100.0f); }, 0 });
     return v;
@@ -129,7 +140,9 @@ inline Result runOnce (const Scenario& s, const std::vector<std::shared_ptr<Resy
     p.seedRandom (1);
     p.prepareToPlay (sr, block);
 
-    const int numBlocks = (int) (s.secs * sr) / block;
+    // ELUKKA_BENCH_SCALE=n renders every scenario n times longer (for profiling with `sample`)
+    const double scale = std::getenv ("ELUKKA_BENCH_SCALE") != nullptr ? juce::jmax (1.0, juce::String (std::getenv ("ELUKKA_BENCH_SCALE")).getDoubleValue()) : 1.0;
+    const int numBlocks = (int) (s.secs * scale * sr) / block;
     if (capture != nullptr) capture->setSize (2, numBlocks * block);
     juce::AudioBuffer<float> buf (2, block);
     Result r { 0.0, 0.0 };

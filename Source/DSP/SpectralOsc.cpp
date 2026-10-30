@@ -200,6 +200,84 @@ void SpectralOsc::setSpectrum (const float* amps, int numHarm, float stretch, fl
     pendingFade = true;
 }
 
+void SpectralOsc::renderBlock (int n, const float* pm, float* outL, float* outR, float* mono, juce::Random& rng) noexcept
+{
+    jassert (n <= maxBlock);
+    float lev[maxBlock];
+    for (int k = 0; k < n; ++k)
+    {
+        lev[k] = level;
+        level += levelInc;
+    }
+
+    if (noise)
+    {
+        for (int k = 0; k < n; ++k)
+        {
+            float nl = rng.nextFloat() * 2.0f - 1.0f;
+            float nr = rng.nextFloat() * 2.0f - 1.0f;
+            outL[k] += nl * lev[k] * 0.5f * panGL;
+            outR[k] += nr * lev[k] * 0.5f * panGR;
+            panGL += dPanL;
+            panGR += dPanR;
+            if (mono != nullptr) mono[k] += (nl + nr) * 0.25f;
+        }
+        return;
+    }
+
+    const WaveTable& cur = tables[curTable];
+    const WaveTable& prev = tables[1 - curTable];
+    float fade[maxBlock];
+    for (int k = 0; k < n; ++k)
+    {
+        fade[k] = xfade;
+        xfade = juce::jmax (0.0f, xfade - xfadeInc);
+    }
+    const float wrap = (float) stretchCycles;
+    float bassOut[maxBlock];
+    if (bassOn)
+    {
+        for (int k = 0; k < n; ++k)
+        {
+            const float ph = bassPhase + (pm != nullptr ? pm[k] : 0.0f);
+            float s = bassTables[curTable].read (ph);
+            if (fade[k] > 0.0f) s += (bassTables[1 - curTable].read (ph) - s) * fade[k];
+            bassPhase += bassInc;
+            bassInc += dBassInc;
+            if (bassPhase >= wrap) bassPhase -= wrap;
+            bassOut[k] = s;
+            outL[k] += s * bassL * lev[k];
+            outR[k] += s * bassR * lev[k];
+            bassL += dBassL;
+            bassR += dBassR;
+        }
+    }
+    float monoSum[maxBlock];
+    if (mono != nullptr) std::fill_n (monoSum, n, 0.0f);
+    for (int v = 0; v < numVoices; ++v)
+    {
+        float ph = phases[v], inc = incs[v], gL = gainL[v], gR = gainR[v];
+        const float dInc = dIncs[v], dL = dgL[v], dR = dgR[v];
+        for (int k = 0; k < n; ++k)
+        {
+            const float p = ph + (pm != nullptr ? pm[k] : 0.0f);
+            float s = cur.read (p);
+            if (fade[k] > 0.0f) s += (prev.read (p) - s) * fade[k];
+            ph += inc;
+            inc += dInc;
+            if (ph >= wrap) ph -= wrap;
+            if (mono != nullptr) monoSum[k] += s;
+            outL[k] += s * gL * lev[k];
+            outR[k] += s * gR * lev[k];
+            gL += dL;
+            gR += dR;
+        }
+        phases[v] = ph; incs[v] = inc; gainL[v] = gL; gainR[v] = gR;
+    }
+    if (mono != nullptr)
+        for (int k = 0; k < n; ++k) mono[k] += monoSum[k] * norm + (bassOn ? bassOut[k] : 0.0f);
+}
+
 void SpectralOsc::beginBlock (int numSamples, float levelStart, float levelEnd)
 {
     if (pendingFade)

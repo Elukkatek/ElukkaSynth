@@ -22,6 +22,20 @@ std::array<float, PartialBank::noiseSize / 2> PartialBank::log2Bin = []
     return t;
 }();
 
+std::array<float, PartialBank::numBands> PartialBank::bandCentreHz = []
+{
+    std::array<float, numBands> t {};
+    for (int b = 0; b < numBands; ++b) t[(size_t) b] = ResynthData::noiseBandCentre (b);
+    return t;
+}();
+
+std::array<float, PartialBank::numBands> PartialBank::bandMidi = []
+{
+    std::array<float, numBands> t {};
+    for (int b = 0; b < numBands; ++b) t[(size_t) b] = 69.0f + 12.0f * std::log2 (ResynthData::noiseBandCentre (b) / 440.0f);
+    return t;
+}();
+
 std::array<float, 512> PartialBank::unitCos = []
 {
     std::array<float, 512> t {};
@@ -84,15 +98,125 @@ inline Vec4 sin2pi (Vec4 x) noexcept
 inline double wrap (double x) noexcept { return x - std::floor (x); }
 }
 
-void PartialBank::renderBlock (int n, float* outL, float* outR, float* mono, Scratch& sc) noexcept
+namespace
+{
+#if ELUKKA_VEC4_NATIVE
+inline float lane (Vec4 v, int i) noexcept { return v[i]; }
+#else
+inline float lane (Vec4 v, int i) noexcept { return v.v[i]; }
+#endif
+}
+
+// Every sine is a rotating phasor. For each unison copy of a partial the sine and cosine at the start of a group of
+// 8 samples are held (sb, cb); the group's 8 values follow by fixed rotations (the sine/cosine of 1..8 steps of its
+// increment, computed once per block), and the phasor is advanced 8 steps per group by one complex multiplication.
+// It is re-seeded from the exact phase at the start of every block, so rounding cannot build up (16 groups at most).
+// Phase modulation (an offset per sample, times the partial's ratio) and a stereo phase (half of it either way for the
+// two sides) are applied as rotations too, from the sine/cosine of the offset. The result matches tick() to about
+// 1e-6, the polynomial sine's own accuracy.
+template <bool Mod, bool Wide, bool Mono>
+void PartialBank::renderPartial (const Slot& sl, const float* ph, int n, const float* pm, Scratch& sc) noexcept
+{
+    const Vec4 j0 = vec4 (1.0f, 2.0f, 3.0f, 4.0f), j1 = vec4 (5.0f, 6.0f, 7.0f, 8.0f);   // samples 1..8 after a group's base
+    const Vec4 k0 = vec4 (0.0f, 1.0f, 2.0f, 3.0f), k1 = vec4 (4.0f, 5.0f, 6.0f, 7.0f);   // sample index within a group
+    const Vec4 quarter = 0.25f;
+    const float po = phaseOffset;
+    const float r0 = sl.ratio, dr = sl.dRatio;
+    const float h0 = 0.5f * sl.sph, dh = 0.5f * sl.dSph;
+    const bool wideGlide = Wide && dh != 0.0f;
+    const float aL = sl.ampL, aR = sl.ampR, dL = sl.dAmpL, dR = sl.dAmpR;
+
+    Vec4 cK0[maxUnison], sK0[maxUnison], cK1[maxUnison], sK1[maxUnison];
+    Vec4 sb[maxUnison], cb[maxUnison], s8[maxUnison], c8[maxUnison];
+    for (int u = 0; u < numUnison; ++u)
+    {
+        const float inc = sl.inc * uniMul[u];
+        sK0[u] = sin2pi (j0 * inc); cK0[u] = sin2pi (j0 * inc + quarter);
+        sK1[u] = sin2pi (j1 * inc); cK1[u] = sin2pi (j1 * inc + quarter);
+        const Vec4 t = sin2pi (vec4 (8.0f * inc, 8.0f * inc + 0.25f, ph[u], ph[u] + 0.25f));
+        s8[u] = lane (t, 0); c8[u] = lane (t, 1); sb[u] = lane (t, 2); cb[u] = lane (t, 3);
+    }
+    Vec4 chC = 1.0f, shC = 0.0f;   // stereo phase rotation when it is constant over the block
+    if (Wide && ! wideGlide)
+    {
+        const Vec4 t = sin2pi (vec4 (h0, h0 + 0.25f, 0.0f, 0.0f));
+        shC = lane (t, 0); chC = lane (t, 1);
+    }
+
+    for (int c = 0; c < n; c += 8)
+    {
+        const Vec4 kc0 = k0 + (float) c, kc1 = k1 + (float) c;
+        Vec4 cO0 = 1.0f, sO0 = 0.0f, cO1 = 1.0f, sO1 = 0.0f;   // phase modulation offset po * ratio (the ratio glides across the block)
+        if constexpr (Mod)
+        {
+            const Vec4 m0 = pm != nullptr ? Vec4 (po) + load4 (pm + c) : Vec4 (po);
+            const Vec4 m1 = pm != nullptr ? Vec4 (po) + load4 (pm + c + 4) : Vec4 (po);
+            const Vec4 off0 = m0 * (Vec4 (r0) + kc0 * dr), off1 = m1 * (Vec4 (r0) + kc1 * dr);
+            sO0 = sin2pi (off0); cO0 = sin2pi (off0 + quarter);
+            sO1 = sin2pi (off1); cO1 = sin2pi (off1 + quarter);
+        }
+        Vec4 ch0 = chC, sh0 = shC, ch1 = chC, sh1 = shC;
+        if (wideGlide)
+        {
+            const Vec4 hf0 = Vec4 (h0) + kc0 * dh, hf1 = Vec4 (h0) + kc1 * dh;
+            sh0 = sin2pi (hf0); ch0 = sin2pi (hf0 + quarter);
+            sh1 = sin2pi (hf1); ch1 = sin2pi (hf1 + quarter);
+        }
+        Vec4 accL0 = 0.0f, accL1 = 0.0f, accR0 = 0.0f, accR1 = 0.0f, accM0 = 0.0f, accM1 = 0.0f;
+        for (int u = 0; u < numUnison; ++u)
+        {
+            const Vec4 S = sb[u], C = cb[u];
+            Vec4 sx0 = S * cK0[u] + C * sK0[u], sx1 = S * cK1[u] + C * sK1[u];   // sine at the group's 8 samples
+            Vec4 cx0 = 0.0f, cx1 = 0.0f;                                         // cosine (used by Mod and Wide)
+            if constexpr (Mod || Wide) { cx0 = C * cK0[u] - S * sK0[u]; cx1 = C * cK1[u] - S * sK1[u]; }
+            sb[u] = S * c8[u] + C * s8[u];                                       // advance 8 samples
+            cb[u] = C * c8[u] - S * s8[u];
+            if constexpr (Mod)
+            {
+                const Vec4 t0 = sx0 * cO0 + cx0 * sO0, t1 = sx1 * cO1 + cx1 * sO1;
+                if constexpr (Wide) { cx0 = cx0 * cO0 - sx0 * sO0; cx1 = cx1 * cO1 - sx1 * sO1; }
+                sx0 = t0; sx1 = t1;
+            }
+            const Vec4 gL0 = load4 (sc.uniL[u] + c), gL1 = load4 (sc.uniL[u] + c + 4);
+            const Vec4 gR0 = load4 (sc.uniR[u] + c), gR1 = load4 (sc.uniR[u] + c + 4);
+            if constexpr (! Wide)
+            {
+                accL0 += sx0 * gL0; accL1 += sx1 * gL1;
+                accR0 += sx0 * gR0; accR1 += sx1 * gR1;
+                if constexpr (Mono) { accM0 += sx0; accM1 += sx1; }
+            }
+            else
+            {
+                // stereo-wide partial: the two sides half a stereo phase either way of the partial's phase
+                const Vec4 vL0 = sx0 * ch0 - cx0 * sh0, vL1 = sx1 * ch1 - cx1 * sh1;
+                const Vec4 vR0 = sx0 * ch0 + cx0 * sh0, vR1 = sx1 * ch1 + cx1 * sh1;
+                accL0 += vL0 * gL0; accL1 += vL1 * gL1;
+                accR0 += vR0 * gR0; accR1 += vR1 * gR1;
+                if constexpr (Mono) { accM0 += Vec4 (0.5f) * (vL0 + vR0); accM1 += Vec4 (0.5f) * (vL1 + vR1); }
+            }
+        }
+        const Vec4 gl0 = Vec4 (aL) + kc0 * dL, gl1 = Vec4 (aL) + kc1 * dL;
+        const Vec4 gr0 = Vec4 (aR) + kc0 * dR, gr1 = Vec4 (aR) + kc1 * dR;
+        store4 (sc.sumL + c, load4 (sc.sumL + c) + accL0 * gl0);
+        store4 (sc.sumL + c + 4, load4 (sc.sumL + c + 4) + accL1 * gl1);
+        store4 (sc.sumR + c, load4 (sc.sumR + c) + accR0 * gr0);
+        store4 (sc.sumR + c + 4, load4 (sc.sumR + c + 4) + accR1 * gr1);
+        if constexpr (Mono)
+        {
+            store4 (sc.sumM + c, load4 (sc.sumM + c) + accM0 * (gl0 + gr0));
+            store4 (sc.sumM + c + 4, load4 (sc.sumM + c + 4) + accM1 * (gl1 + gr1));
+        }
+    }
+}
+
+void PartialBank::renderBlock (int n, float* outL, float* outR, float* mono, Scratch& sc, const float* pm) noexcept
 {
     if (n <= 0) return;
     jassert (n <= maxBlock);
     const int nPad = (n + 7) & ~7;   // worked in groups of 8 samples
 
     // Unison gains over the block (shared by every partial). Each partial's sines advance inc per sample before
-    // each read, as in tick(); a group's start phase is computed in double precision from the block's start, so
-    // rounding never accumulates.
+    // each read, as in tick().
     for (int u = 0; u < numUnison; ++u)
         for (int k = 0; k < nPad; ++k)
         {
@@ -101,69 +225,35 @@ void PartialBank::renderBlock (int n, float* outL, float* outR, float* mono, Scr
         }
     std::fill_n (sc.sumL, nPad, 0.0f);
     std::fill_n (sc.sumR, nPad, 0.0f);
-    std::fill_n (sc.sumM, nPad, 0.0f);
+    if (mono != nullptr) std::fill_n (sc.sumM, nPad, 0.0f);
     std::fill_n (sc.bass, nPad, 0.0f);
     bool anyBass = false;
     const float po = phaseOffset;
-    const Vec4 j0 = vec4 (1.0f, 2.0f, 3.0f, 4.0f), j1 = vec4 (5.0f, 6.0f, 7.0f, 8.0f);   // samples 1..8 after a group's base
-    const Vec4 k0 = vec4 (0.0f, 1.0f, 2.0f, 3.0f), k1 = vec4 (4.0f, 5.0f, 6.0f, 7.0f);   // sample index within a group
+    const bool modulated = pm != nullptr || po != 0.0f;
+    const Vec4 j0 = vec4 (1.0f, 2.0f, 3.0f, 4.0f), j1 = vec4 (5.0f, 6.0f, 7.0f, 8.0f);
+    const Vec4 k0 = vec4 (0.0f, 1.0f, 2.0f, 3.0f), k1 = vec4 (4.0f, 5.0f, 6.0f, 7.0f);
+    const Vec4 quarter = 0.25f;
 
     for (int a = 0; a < numActive; ++a)
     {
         const int s = active[a];
         auto& sl = slots[s];
-        const float r0 = sl.ratio, dr = sl.dRatio;
-        const bool wide = ! (std::abs (sl.sph) < 0.002f && sl.dSph == 0.0f);   // as tick() decides (constant over the block)
-        const float h0 = 0.5f * sl.sph, dh = 0.5f * sl.dSph;
-        const float aL = sl.ampL, aR = sl.ampR, dL = sl.dAmpL, dR = sl.dAmpR;
         float* ph = phases[s];
-        float incs[maxUnison];
-        for (int u = 0; u < numUnison; ++u) incs[u] = sl.inc * uniMul[u];
-
-        for (int c = 0; c < n; c += 8)
+        const bool wide = ! (std::abs (sl.sph) < 0.002f && sl.dSph == 0.0f);   // as tick() decides (constant over the block)
+        const int which = (modulated ? 4 : 0) + (wide ? 2 : 0) + (mono != nullptr ? 1 : 0);
+        switch (which)
         {
-            const Vec4 kc0 = k0 + (float) c, kc1 = k1 + (float) c;
-            // Phase modulation offset po * ratio (the ratio glides across the block)
-            Vec4 off0 = 0.0f, off1 = 0.0f;
-            if (po != 0.0f) { off0 = Vec4 (po) * (Vec4 (r0) + kc0 * dr); off1 = Vec4 (po) * (Vec4 (r0) + kc1 * dr); }
-            Vec4 hf0 = 0.0f, hf1 = 0.0f;
-            if (wide) { hf0 = Vec4 (h0) + kc0 * dh; hf1 = Vec4 (h0) + kc1 * dh; }
-            Vec4 accL0 = 0.0f, accL1 = 0.0f, accR0 = 0.0f, accR1 = 0.0f, accM0 = 0.0f, accM1 = 0.0f;
-            for (int u = 0; u < numUnison; ++u)
-            {
-                const float inc = incs[u];
-                const float base = (float) wrap ((double) ph[u] + (double) c * (double) inc);
-                const Vec4 x0 = Vec4 (base) + j0 * inc + off0, x1 = Vec4 (base) + j1 * inc + off1;
-                const Vec4 gL0 = load4 (sc.uniL[u] + c), gL1 = load4 (sc.uniL[u] + c + 4);
-                const Vec4 gR0 = load4 (sc.uniR[u] + c), gR1 = load4 (sc.uniR[u] + c + 4);
-                if (! wide)
-                {
-                    const Vec4 v0 = sin2pi (x0), v1 = sin2pi (x1);
-                    accL0 += v0 * gL0; accL1 += v1 * gL1;
-                    accR0 += v0 * gR0; accR1 += v1 * gR1;
-                    accM0 += v0;       accM1 += v1;
-                }
-                else
-                {
-                    // stereo-wide partial: the two sides half a stereo phase either way of the partial's phase
-                    const Vec4 vL0 = sin2pi (x0 - hf0), vL1 = sin2pi (x1 - hf1);
-                    const Vec4 vR0 = sin2pi (x0 + hf0), vR1 = sin2pi (x1 + hf1);
-                    accL0 += vL0 * gL0; accL1 += vL1 * gL1;
-                    accR0 += vR0 * gR0; accR1 += vR1 * gR1;
-                    accM0 += Vec4 (0.5f) * (vL0 + vR0); accM1 += Vec4 (0.5f) * (vL1 + vR1);
-                }
-            }
-            const Vec4 gl0 = Vec4 (aL) + kc0 * dL, gl1 = Vec4 (aL) + kc1 * dL;
-            const Vec4 gr0 = Vec4 (aR) + kc0 * dR, gr1 = Vec4 (aR) + kc1 * dR;
-            store4 (sc.sumL + c, load4 (sc.sumL + c) + accL0 * gl0);
-            store4 (sc.sumL + c + 4, load4 (sc.sumL + c + 4) + accL1 * gl1);
-            store4 (sc.sumR + c, load4 (sc.sumR + c) + accR0 * gr0);
-            store4 (sc.sumR + c + 4, load4 (sc.sumR + c + 4) + accR1 * gr1);
-            store4 (sc.sumM + c, load4 (sc.sumM + c) + accM0 * (gl0 + gr0));
-            store4 (sc.sumM + c + 4, load4 (sc.sumM + c + 4) + accM1 * (gl1 + gr1));
+            case 0: renderPartial<false, false, false> (sl, ph, n, pm, sc); break;
+            case 1: renderPartial<false, false, true>  (sl, ph, n, pm, sc); break;
+            case 2: renderPartial<false, true, false>  (sl, ph, n, pm, sc); break;
+            case 3: renderPartial<false, true, true>   (sl, ph, n, pm, sc); break;
+            case 4: renderPartial<true, false, false>  (sl, ph, n, pm, sc); break;
+            case 5: renderPartial<true, false, true>   (sl, ph, n, pm, sc); break;
+            case 6: renderPartial<true, true, false>   (sl, ph, n, pm, sc); break;
+            default: renderPartial<true, true, true>   (sl, ph, n, pm, sc); break;
         }
         for (int u = 0; u < numUnison; ++u)
-            ph[u] = (float) wrap ((double) ph[u] + (double) n * (double) incs[u]);
+            ph[u] = (float) wrap ((double) ph[u] + (double) n * (double) (sl.inc * uniMul[u]));
 
         // Bass Mono voice: always advanced so it stays in step with the centre unison voice
         const float aB = sl.ampB, dB = sl.dAmpB;
@@ -171,14 +261,30 @@ void PartialBank::renderBlock (int n, float* outL, float* outR, float* mono, Scr
         {
             anyBass = true;
             const float inc = sl.inc;
+            const float r0 = sl.ratio, dr = sl.dRatio;
+            const Vec4 sK0 = sin2pi (j0 * inc), cK0 = sin2pi (j0 * inc + quarter);
+            const Vec4 sK1 = sin2pi (j1 * inc), cK1 = sin2pi (j1 * inc + quarter);
+            const Vec4 t = sin2pi (vec4 (8.0f * inc, 8.0f * inc + 0.25f, bassPhase[s], bassPhase[s] + 0.25f));
+            const Vec4 s8 = lane (t, 0), c8 = lane (t, 1);
+            Vec4 sb = lane (t, 2), cb = lane (t, 3);
             for (int c = 0; c < n; c += 8)
             {
                 const Vec4 kc0 = k0 + (float) c, kc1 = k1 + (float) c;
-                const float base = (float) wrap ((double) bassPhase[s] + (double) c * (double) inc);
-                Vec4 x0 = Vec4 (base) + j0 * inc, x1 = Vec4 (base) + j1 * inc;
-                if (po != 0.0f) { x0 += Vec4 (po) * (Vec4 (r0) + kc0 * dr); x1 += Vec4 (po) * (Vec4 (r0) + kc1 * dr); }
-                store4 (sc.bass + c, load4 (sc.bass + c) + sin2pi (x0) * (Vec4 (aB) + kc0 * dB));
-                store4 (sc.bass + c + 4, load4 (sc.bass + c + 4) + sin2pi (x1) * (Vec4 (aB) + kc1 * dB));
+                Vec4 sx0 = sb * cK0 + cb * sK0, sx1 = sb * cK1 + cb * sK1;
+                if (modulated)
+                {
+                    const Vec4 cx0 = cb * cK0 - sb * sK0, cx1 = cb * cK1 - sb * sK1;
+                    const Vec4 m0 = pm != nullptr ? Vec4 (po) + load4 (pm + c) : Vec4 (po);
+                    const Vec4 m1 = pm != nullptr ? Vec4 (po) + load4 (pm + c + 4) : Vec4 (po);
+                    const Vec4 off0 = m0 * (Vec4 (r0) + kc0 * dr), off1 = m1 * (Vec4 (r0) + kc1 * dr);
+                    sx0 = sx0 * sin2pi (off0 + quarter) + cx0 * sin2pi (off0);
+                    sx1 = sx1 * sin2pi (off1 + quarter) + cx1 * sin2pi (off1);
+                }
+                const Vec4 nsb = sb * c8 + cb * s8;
+                cb = cb * c8 - sb * s8;
+                sb = nsb;
+                store4 (sc.bass + c, load4 (sc.bass + c) + sx0 * (Vec4 (aB) + kc0 * dB));
+                store4 (sc.bass + c + 4, load4 (sc.bass + c + 4) + sx1 * (Vec4 (aB) + kc1 * dB));
             }
         }
         bassPhase[s] = (float) wrap ((double) bassPhase[s] + (double) n * (double) sl.inc);
@@ -213,7 +319,7 @@ void PartialBank::renderBlock (int n, float* outL, float* outR, float* mono, Scr
         }
         outL[k] += l * lev;
         outR[k] += r * lev;
-        mono[k] += sc.sumM[k] * monoScale + sc.bass[k];
+        if (mono != nullptr) mono[k] += sc.sumM[k] * monoScale + sc.bass[k];
     }
 
     const float fn = (float) n;
@@ -437,6 +543,11 @@ void PartialBank::setBlock (const ResynthData& d, const BlockParams& p, const Ga
     const bool tuning = p.tune > 0.0f && ! d.noteMidi.empty();
     const float corrK = 1.0f - std::exp (-(float) n / (0.025f * (float) sr));   // correction glide, 25 ms time constant
     const float invMax = 1.0f / d.maxAmp;
+    const float keyRatio = std::exp2 (transposeCents / 1200.0f);   // the pitch ratio when Tune is 0 (then no partial has a correction)
+    // the frames meanFreq integrates over this block, the same for every slot
+    int spanFrames[16];
+    double spanWeights[16];
+    const int spanCount = d.meanFreqSpan (u0, u1, spanFrames, spanWeights, 16);
 
     // Gate: thresholds (amplitude) relative to the loudest partial at this moment; between them a smooth 6 dB knee
     float gateLo = 0.0f, gateHi = 0.0f;
@@ -460,12 +571,14 @@ void PartialBank::setBlock (const ResynthData& d, const BlockParams& p, const Ga
 
         if (a > 0.0f)
         {
-            const float fSrc = d.meanFreq (s, u0, u1);
+            const float fSrc = spanCount > 0 ? d.meanFreqOver (s, spanFrames, spanWeights, spanCount, u0, u1) : d.meanFreq (s, u0, u1);
             pan = juce::jlimit (-1.0f, 1.0f, d.pan[rowA + (size_t) s] + (d.pan[rowB + (size_t) s] - d.pan[rowA + (size_t) s]) * ft);
             if (! d.stereoPhase.empty()) stereoPh = d.stereoPhase[(aA > 0.0f ? rowA : rowB) + (size_t) s];
-            startPhase = d.phaseAt (s, u0);
 
             auto& sl = slots[s];
+            // the measured phase is only used by a partial (re)starting from silence (setSlot)
+            if (! sl.primed || (sl.targetL <= 0.0f && sl.targetR <= 0.0f && sl.targetB <= 0.0f))
+                startPhase = d.phaseAt (s, u0);
             float corr = 0.0f;
             if (tuning)
             {
@@ -476,7 +589,7 @@ void PartialBank::setBlock (const ResynthData& d, const BlockParams& p, const Ga
             if (! sl.corrValid || std::abs (fSrc - sl.srcFreq) > 0.0595f * sl.srcFreq) { sl.corr = corr; sl.corrValid = true; }
             else sl.corr += (corr - sl.corr) * corrK;
             sl.srcFreq = fSrc;
-            f = fSrc * std::exp2 ((transposeCents + p.tune * sl.corr) / 1200.0f);
+            f = fSrc * (p.tune == 0.0f ? keyRatio : std::exp2 ((transposeCents + p.tune * sl.corr) / 1200.0f));
             if (p.stretch != 0.0f)
                 f *= std::pow (juce::jmax (0.01f, f / p.f0), p.stretch * 0.25f);
             h = f / p.f0;
@@ -549,7 +662,7 @@ void PartialBank::setNoiseBlock (const ResynthData& d, const BlockParams& p, con
         float pL[numBands + 1] {}, pR[numBands + 1] {}, pC[numBands + 1] {};
         for (int b = 0; b < numBands; ++b)
         {
-            const float midiB = 69.0f + 12.0f * std::log2 (ResynthData::noiseBandCentre (b) / 440.0f);
+            const float midiB = bandMidi[(size_t) b];
             float best = 1.0e9f, m = 0.0f;
             for (int i = 0; i < ResynthData::maxNotesPerFrame && notes[i] > 0.0f; ++i)
                 if (std::abs (notes[i] - midiB) < best) { best = std::abs (notes[i] - midiB); m = notes[i]; }
@@ -573,7 +686,7 @@ void PartialBank::setNoiseBlock (const ResynthData& d, const BlockParams& p, con
     for (int b = 0; b < numBands; ++b)
     {
         float nL = srcL[b], nR = srcR[b], coh = srcC[b];
-        const float fPlayed = ResynthData::noiseBandCentre (b) * noteRatio;
+        const float fPlayed = bandCentreHz[(size_t) b] * noteRatio;
         if (p.bassMono && fPlayed < p.bassFreq)
         {
             // the bass region is one centred signal

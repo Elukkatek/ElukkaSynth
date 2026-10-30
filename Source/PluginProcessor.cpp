@@ -48,6 +48,7 @@ void ElukkaAudioProcessor::cacheParams()
     hmPrism = raw ("hm_prism"); hmPrismCenter = raw ("hm_prismCenter"); hmPrismWidth = raw ("hm_prismWidth");
     hmShimmer = raw ("hm_shimmer"); hmShimmerRate = raw ("hm_shimmerRate");
     hmTableSrc = raw ("hm_tableSrc"); hmTableAmt = raw ("hm_tableAmt");
+    rslAttack = raw ("rsl_attack"); rslRelease = raw ("rsl_release"); rslGain = raw ("rsl_gain"); rslFloor = raw ("rsl_floor");
     rsTune = raw ("rs_tune"); rsGate = raw ("rs_gate"); rsLift = raw ("rs_lift"); rsSpeed = raw ("rs_speed"); rsSync = raw ("rs_sync"); rsBpm = raw ("rs_bpm");
     rsPos = raw ("rs_pos"); rsLoop = raw ("rs_loop");
     fxfOn = raw ("fxf_on"); fxfType = raw ("fxf_type"); fxfSlope = raw ("fxf_slope");
@@ -168,6 +169,8 @@ void ElukkaAudioProcessor::buildContext (double bpm)
     ctx.rsSubLift = rsSubLift->load(); ctx.rsBassFreq = rsBassFreq->load();
     ctx.rsPos = rsPos->load();
     ctx.rsLoop = on (rsLoop);
+    ctx.rslAttack = rslAttack->load(); ctx.rslRelease = rslRelease->load();
+    ctx.rslGain = rslGain->load(); ctx.rslFloor = rslFloor->load();
 
     ctx.filter = { idx (fltType), idx (fltSlope), fltCutoff->load(), fltRes->load(), fltEnv->load(), fltKey->load(), fltDrive->load() };
     ctx.filterEnv.attack = fltA->load(); ctx.filterEnv.decay = fltD->load();
@@ -327,11 +330,12 @@ void ElukkaAudioProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
         src[P::modSrc[i]] = globalMods[i].process (m, shapes[i], num, sr, rng, locked);
         globalModValue[i] = src[P::modSrc[i]];
     }
-    float env = 0.0f;
+    float env = 0.0f, rsLevel = 0.0f;
     uint64_t newest = 0;
     for (auto& v : voices)
-        if (v.active && v.age >= newest) { newest = v.age; env = v.envValue; }
+        if (v.active && v.age >= newest) { newest = v.age; env = v.envValue; rsLevel = v.rsLevel; }
     src[P::SrcAmpEnv] = env;
+    src[P::SrcRsLevel] = rsLevel;
     src[P::SrcVel] = lastVelocity;
     src[P::SrcModWheel] = modWheel;
     src[P::SrcMacro1] = ctx.macro1;
@@ -426,6 +430,7 @@ void ElukkaAudioProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
                       ? (float) (newestVoice->rsPlayTime / ctx.resynth->durationSec) : -1.0f;
         uiPlaying = newestVoice != nullptr;
         for (int i = 0; i < P::numMods; ++i) uiMod[i] = newestVoice != nullptr ? newestVoice->modValue[i] : 0.0f;
+        uiRsLevel = newestVoice != nullptr ? newestVoice->rsLevel : 0.0f;
     }
 }
 

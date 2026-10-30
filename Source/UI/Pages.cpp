@@ -922,10 +922,13 @@ ResynthPage::ResynthPage (ElukkaAudioProcessor& p)
       tune (p.apvts, "rs_tune", "Tune"), gate (p.apvts, "rs_gate", "Gate"), lift (p.apvts, "rs_lift", "Lift"), subLift (p.apvts, "rs_subLift", "Sub Lift"),
       speed (p.apvts, "rs_speed", "Speed"),
       bpm (p.apvts, "rs_bpm", "Source BPM"), pos (p.apvts, "rs_pos", "Position"),
-      sync (p.apvts, "rs_sync", "Sync to Host"), loop (p.apvts, "rs_loop", "Loop")
+      sync (p.apvts, "rs_sync", "Sync to Host"), loop (p.apvts, "rs_loop", "Loop"),
+      lvlAttack (p.apvts, "rsl_attack", "Attack"), lvlRelease (p.apvts, "rsl_release", "Release"),
+      lvlGain (p.apvts, "rsl_gain", "Gain"), lvlFloor (p.apvts, "rsl_floor", "Floor")
 {
     for (auto* c : std::initializer_list<juce::Component*> { &sourcePanel, &playPanel, &loadAudioBtn, &loadImageBtn, &clearBtn, &detectBtn,
-                                                              &doubleBtn, &halveBtn, &useOsc1, &info, &help, &view, &tune, &gate, &lift, &subLift, &speed, &bpm, &pos, &sync, &loop })
+                                                              &doubleBtn, &halveBtn, &useOsc1, &info, &view, &tune, &gate, &lift, &subLift, &speed, &bpm, &pos, &sync, &loop,
+                                                              &levelTitle, &levelHelp, &levelMeter, &lvlAttack, &lvlRelease, &lvlGain, &lvlFloor })
         addAndMakeVisible (c);
 
     loadAudioBtn.onClick = [this] { loadAudio(); };
@@ -954,29 +957,26 @@ ResynthPage::ResynthPage (ElukkaAudioProcessor& p)
 
     info.setColour (juce::Label::textColourId, Col::text);
     info.setJustificationType (juce::Justification::topLeft);
-    help.setColour (juce::Label::textColourId, Col::dim);
-    help.setFont (juce::Font (juce::FontOptions (11.5f)));
-    help.setJustificationType (juce::Justification::topLeft);
-    help.setText ("Set an oscillator's wave to \"Resynth\" to play the source. Middle C (C3 in Ableton, C5 in FL) "
-                  "plays it at its original pitch; other keys transpose it.\n\n"
-                  "Tune: 0% plays the source as it is, transposed by the key. 100% moves every note found in the "
-                  "source to the nearest note with the key's name, each in its own octave (press C: a melody E G B "
-                  "becomes C C C with the octaves kept, a chord stays spread); playing an octave above or below "
-                  "middle C's octave moves the result an octave too; values in between move part of the way.\n"
-                  "Gate: fades out partials more than the set level below the loudest partial at that moment (-80 dB = off). "
-                  "It comes before Lift, so Lift does not bring back what Gate removed.\n"
-                  "Lift: raises quiet partials and dark image areas above Bass Freq (Synth page); Sub Lift does the same below it. "
-                  "Bass Mono (on each oscillator) centres everything below Bass Freq.\n\n"
-                  "Audio: tempo is detected on load. With Sync to Host on, the loop is time-stretched to your "
-                  "project tempo. If the BPM is detected at half/double speed, use the x2 and /2 buttons.\n\n"
-                  "Images: brightness = level, bottom row = fundamental, left to right = time (one bar).",
-                  juce::dontSendNotification);
+    levelTitle.setText ("RESYNTH LEVEL", juce::dontSendNotification);
+    levelTitle.setColour (juce::Label::textColourId, Col::text);
+    levelTitle.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+    levelHelp.setColour (juce::Label::textColourId, Col::dim);
+    levelHelp.setFont (juce::Font (juce::FontOptions (11.5f)));
+    levelHelp.setJustificationType (juce::Justification::topLeft);
+    levelHelp.setText ("A modulation source that follows the loudness of the source at the playhead. "
+                       "Right-click a knob and choose Resynth to map it.", juce::dontSendNotification);
+    levelMeter.setTooltip ("Resynth Level of the newest note");
+    lvlAttack.slider.setTooltip ("How fast the level rises");
+    lvlRelease.slider.setTooltip ("How fast the level falls");
+    lvlGain.slider.setTooltip ("Scales the level (it stops at 100 %)");
+    lvlFloor.slider.setTooltip ("Source level that counts as 0; the loudest moment of the source is 100 %");
     refresh();
 }
 
 void ResynthPage::tick()
 {
     view.setPlayhead (proc.uiRsPos.load());
+    levelMeter.setValue (proc.uiRsLevel.load());
     if (bpmField.isBeingEdited()) return;
     auto text = juce::String (proc.apvts.getRawParameterValue ("rs_bpm")->load(), 2);
     if (bpmField.getText() != text) bpmField.setText (text, juce::dontSendNotification);
@@ -1134,8 +1134,13 @@ void ResynthPage::resized()
     c.removeFromTop (10);
     info.setBounds (c.removeFromTop (70));
     useOsc1.setBounds (c.removeFromTop (26));
-    c.removeFromTop (10);
-    help.setBounds (c);
+    c.removeFromTop (16);
+    levelTitle.setBounds (c.removeFromTop (18));
+    levelHelp.setBounds (c.removeFromTop (32));
+    c.removeFromTop (4);
+    levelMeter.setBounds (c.removeFromTop (8));
+    c.removeFromTop (8);
+    layoutRow (c.removeFromTop (70), { &lvlAttack, &lvlRelease, &lvlGain, &lvlFloor }, 66, 2);
 
     area.removeFromLeft (8);
     auto bottom = area.removeFromBottom (130);

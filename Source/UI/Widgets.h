@@ -255,7 +255,7 @@ public:
             addAndMakeVisible (mapLabel);
             const std::pair<const char*, int> sources[] { { "Macro 1", P::SrcMacro1 }, { "Macro 2", P::SrcMacro2 },
                                                           { "Mod 1", P::SrcMod1 }, { "Mod 2", P::SrcMod2 }, { "Mod 3", P::SrcMod3 },
-                                                          { "S&H", P::SrcSH }, { "Amp Env", P::SrcAmpEnv } };
+                                                          { "S&H", P::SrcSH }, { "AMP", P::SrcAmpEnv }, { "Resynth", P::SrcRsLevel } };
             for (int i = 0; i < numMapButtons; ++i)
             {
                 mapButtons[i].setButtonText (sources[i].first);
@@ -396,7 +396,7 @@ private:
                 rows.push_back (std::move (row));
             }
         const int h = dest == P::DstNone ? 112 : 178 + (status.getText().isEmpty() ? 0 : 18) + (int) rows.size() * 28;
-        setSize (400, h);   // room for seven "Modulate with" buttons
+        setSize (460, h);   // room for eight "Modulate with" buttons
         resized();
     }
 
@@ -406,7 +406,7 @@ private:
     juce::Label title, valueLabel, hint, mapLabel, status;
     juce::TextEditor valueBox;
     juce::TextButton resetButton;
-    static constexpr int numMapButtons = 7;
+    static constexpr int numMapButtons = 8;
     juce::TextButton mapButtons[numMapButtons];
     std::vector<std::unique_ptr<Row>> rows;
 };
