@@ -4,6 +4,10 @@
 #include <JuceHeader.h>
 #include "../Source/PluginProcessor.h"
 
+// The Master setting that plays at the engine's own level, the old Master 0 dB (the output sits 6 dB above the knob):
+// tests comparing levels against a source, or using absolute thresholds, set this.
+constexpr float unityMasterDb = -6.0206f;
+
 namespace ResynthEval
 {
 constexpr double sr = 44100.0;
@@ -419,7 +423,7 @@ inline juce::AudioBuffer<float> resynthesize (const juce::AudioBuffer<float>& sr
     auto& q = *qp;
     q.setPlayConfigDetails (0, 2, sr, block);
     auto setP = [&q] (const char* id, float v) { auto* p = q.apvts.getParameter (id); p->setValueNotifyingHost (p->convertTo0to1 (v)); };
-    setP ("o1_wave", (float) P::WResynth); setP ("o1_level", 1.0f); setP ("master", 0.0f);
+    setP ("o1_wave", (float) P::WResynth); setP ("o1_level", 1.0f); setP ("master", unityMasterDb);
     setP ("rs_sync", 0.0f); setP ("rs_loop", 0.0f); setP ("ampA", 0.001f); setP ("ampS", 1.0f); setP ("ampR", 0.01f);
     if (const char* tune = std::getenv ("ELUKKA_EVAL_TUNE")) setP ("rs_tune", (float) std::atof (tune));   // listen to the tuned result (key C4)
     const auto t0 = juce::Time::getMillisecondCounterHiRes();
@@ -837,7 +841,7 @@ inline int debugNotes (const juce::String& name, double fromSec, double toSec)
         auto& q = *qp;
         q.setPlayConfigDetails (0, 2, sr, block);
         auto setP = [&q] (const char* id, float v) { auto* p = q.apvts.getParameter (id); p->setValueNotifyingHost (p->convertTo0to1 (v)); };
-        setP ("o1_wave", (float) P::WResynth); setP ("o1_level", 1.0f); setP ("master", 0.0f);
+        setP ("o1_wave", (float) P::WResynth); setP ("o1_level", 1.0f); setP ("master", unityMasterDb);
         setP ("rs_sync", 0.0f); setP ("rs_loop", 0.0f); setP ("ampA", 0.001f); setP ("ampS", 1.0f);
         setP ("rs_tune", std::getenv ("ELUKKA_TUNE_PCT") != nullptr ? (float) std::atof (std::getenv ("ELUKKA_TUNE_PCT")) : 100.0f);   // ELUKKA_TUNE_PCT overrides
         q.setResynth (d);

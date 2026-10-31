@@ -713,7 +713,7 @@ int main (int argc, char** argv)
         ElukkaAudioProcessor rp;
         rp.setPlayHead (&ph);
         rp.setPlayConfigDetails (0, 2, sr, block);
-        setP (rp, "o1_wave", (float) P::WResynth); setP (rp, "o1_level", 1.0f); setP (rp, "master", 0.0f);
+        setP (rp, "o1_wave", (float) P::WResynth); setP (rp, "o1_level", 1.0f); setP (rp, "master", unityMasterDb);
         setP (rp, "rs_sync", 0.0f); setP (rp, "rs_loop", 0.0f); setP (rp, "ampA", 0.001f); setP (rp, "ampS", 1.0f);
         rp.setResynth (data);
 
@@ -861,7 +861,7 @@ int main (int argc, char** argv)
         ElukkaAudioProcessor fp;
         fp.setPlayHead (&ph);
         fp.setPlayConfigDetails (0, 2, sr, block);
-        setP (fp, "master", 0.0f); setP (fp, "ampA", 0.001f); setP (fp, "ampS", 1.0f); setP (fp, "o1_wave", (float) P::WSaw);
+        setP (fp, "master", unityMasterDb); setP (fp, "ampA", 0.001f); setP (fp, "ampS", 1.0f); setP (fp, "o1_wave", (float) P::WSaw);
         const float c3 = 261.6256f;
         auto db = [&] (const juce::AudioBuffer<float>& b, float hz) { return juce::Decibels::gainToDecibels (measure (b, 0, hz).first, -140.0f); };
         auto open = renderNotes (fp, { 60 }, 2.0);
@@ -1356,7 +1356,7 @@ int main (int argc, char** argv)
         struct Scenario { const char* name; std::function<void (ElukkaAudioProcessor&)> setup; std::vector<std::pair<int, juce::MidiMessage>> midi; double seconds; };
         auto sineBase = [&] (ElukkaAudioProcessor& q)
         {
-            setP (q, "o1_wave", (float) P::WSine); setP (q, "master", 0.0f); setP (q, "ampA", 0.005f); setP (q, "ampS", 1.0f);
+            setP (q, "o1_wave", (float) P::WSine); setP (q, "master", unityMasterDb); setP (q, "ampA", 0.005f); setP (q, "ampS", 1.0f);
             setP (q, "ampR", 0.05f);
             q.shapes[0].setPoints (ModShape::preset (0));   // sine LFO shape (the default Mod 1 shape is a decay, i.e. a saw as an LFO)
         };
@@ -1525,7 +1525,7 @@ int main (int argc, char** argv)
             auto& q = *qp;
             q.setPlayHead (&ph);
             q.setPlayConfigDetails (0, 2, sr, block);
-            setP (q, "o1_wave", (float) P::WResynth); setP (q, "o1_level", 1.0f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f);
+            setP (q, "o1_wave", (float) P::WResynth); setP (q, "o1_level", 1.0f); setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f);
             setP (q, "rs_sync", 0.0f); setP (q, "ampA", 0.001f);
             if (sh)
             {
@@ -1592,7 +1592,7 @@ int main (int argc, char** argv)
         }
         ElukkaAudioProcessor fq;
         fq.setPlayConfigDetails (0, 2, sr, block);
-        setP (fq, "o1_wave", (float) P::WResynth); setP (fq, "master", 0.0f); setP (fq, "rs_sync", 0.0f); setP (fq, "ampS", 1.0f);
+        setP (fq, "o1_wave", (float) P::WResynth); setP (fq, "master", unityMasterDb); setP (fq, "rs_sync", 0.0f); setP (fq, "ampS", 1.0f);
         setP (fq, "o2_on", 1.0f); setP (fq, "o2_wave", (float) P::WSine); setP (fq, "o2_level", 0.0f);
         setP (fq, "o1_fmSrc", 2.0f); setP (fq, "o1_fmAmt", 0.5f);
         fq.setResynth (ResynthData::fromAudio (src6k, sr, "6k"));
@@ -1660,7 +1660,7 @@ int main (int argc, char** argv)
         auto stData = ResynthData::fromAudio (st, sr, "stereo");
         ElukkaAudioProcessor bp;
         bp.setPlayConfigDetails (0, 2, sr, block);
-        setP (bp, "o1_wave", (float) P::WResynth); setP (bp, "master", 0.0f); setP (bp, "rs_sync", 0.0f); setP (bp, "ampS", 1.0f);
+        setP (bp, "o1_wave", (float) P::WResynth); setP (bp, "master", unityMasterDb); setP (bp, "rs_sync", 0.0f); setP (bp, "ampS", 1.0f);
         bp.setResynth (stData);
         auto lr = [&] (const juce::AudioBuffer<float>& b2, float hz) { return std::make_pair (measure (b2, 0, hz).first, measure (b2, 1, hz).first); };
         auto plain = renderNotes (bp, { 60 }, 2.0);
@@ -1691,7 +1691,7 @@ int main (int argc, char** argv)
             {
                 q.setPlayConfigDetails (0, 2, sr, block);
                 setP (q, "o1_wave", (float) P::WSaw);
-                setP (q, "master", 0.0f); setP (q, "ampS", 1.0f);
+                setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f);
                 setP (q, "o1_uniVoices", (float) voices); setP (q, "o1_uniDetune", 50.0f); setP (q, "o1_phaseMode", 1.0f); setP (q, "o1_rand", 100.0f);
                 setP (q, "o1_bassMono", bassMono ? 1.0f : 0.0f); setP (q, "o1_pan", pan);
                 return renderNotes (q, { 36 }, 2.0);   // C2: fundamental 65 Hz (bass), 4th harmonic 262 Hz (above the 120 Hz crossover)
@@ -1767,7 +1767,7 @@ int main (int argc, char** argv)
         {
             auto q = std::make_unique<ElukkaAudioProcessor>();
             q->setPlayConfigDetails (0, 2, sr, block);
-            setP (*q, "o1_wave", (float) P::WSine); setP (*q, "master", 0.0f); setP (*q, "ampS", 1.0f); setP (*q, "ampR", relSec);
+            setP (*q, "o1_wave", (float) P::WSine); setP (*q, "master", unityMasterDb); setP (*q, "ampS", 1.0f); setP (*q, "ampR", relSec);
             setP (*q, "sq_on", 1.0f); setP (*q, "sq_gate", 0.3f);
             q->pattern = SeqPattern::fromText ("t", "xx", "C G");
             auto out = renderNotes (*q, { 60 }, 0.6);
@@ -2164,7 +2164,7 @@ int main (int argc, char** argv)
                 ElukkaAudioProcessor ip;
                 ip.setPlayHead (&ph);
                 ip.setPlayConfigDetails (0, 2, sr, block);
-                setP (ip, "o1_wave", (float) P::WResynth); setP (ip, "o1_level", 1.0f); setP (ip, "master", 0.0f);
+                setP (ip, "o1_wave", (float) P::WResynth); setP (ip, "o1_level", 1.0f); setP (ip, "master", unityMasterDb);
                 setP (ip, "rs_sync", 0.0f); setP (ip, "rs_loop", 0.0f); setP (ip, "ampA", 0.001f); setP (ip, "ampS", 1.0f);
                 ip.setResynth (ResynthData::fromImage (im.image, im.name));
                 auto out = renderNotes (ip, { 60 }, 2.0);
@@ -2201,7 +2201,7 @@ int main (int argc, char** argv)
             ElukkaAudioProcessor sp;
             sp.setPlayHead (&ph);
             sp.setPlayConfigDetails (0, 2, sr, block);
-            setP (sp, "o1_wave", (float) P::WResynth); setP (sp, "o1_level", 1.0f); setP (sp, "master", 0.0f); setP (sp, "rs_sync", 0.0f); setP (sp, "ampS", 1.0f);
+            setP (sp, "o1_wave", (float) P::WResynth); setP (sp, "o1_level", 1.0f); setP (sp, "master", unityMasterDb); setP (sp, "rs_sync", 0.0f); setP (sp, "ampS", 1.0f);
             sp.setResynth (da);
             sp.prepareToPlay (sr, block);
             juce::AudioBuffer<float> buf (2, block);
@@ -2230,7 +2230,7 @@ int main (int argc, char** argv)
         auto& q = *tp;
         q.setPlayHead (&ph);
         q.setPlayConfigDetails (0, 2, sr, block);
-        setP (q, "o1_wave", (float) P::WResynth); setP (q, "o1_level", 1.0f); setP (q, "master", 0.0f);
+        setP (q, "o1_wave", (float) P::WResynth); setP (q, "o1_level", 1.0f); setP (q, "master", unityMasterDb);
         setP (q, "rs_sync", 0.0f); setP (q, "rs_loop", 0.0f); setP (q, "ampA", 0.001f); setP (q, "ampS", 1.0f);
 
         auto makeTone = [&] (double secs, std::function<float (float t)> fn)
@@ -2745,7 +2745,7 @@ int main (int argc, char** argv)
         {
             ElukkaAudioProcessor q;
             q.setPlayConfigDetails (0, 2, sr, block);
-            setP (q, "master", 0.0f); setP (q, "ampS", 1.0f);
+            setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f);
             setP (q, "o1_wave", (float) P::WSaw);
             setup (q);
             return renderNotes (q, { note }, 2.0);
@@ -2793,7 +2793,7 @@ int main (int argc, char** argv)
         {
             ElukkaAudioProcessor q;
             q.setPlayConfigDetails (0, 2, sr, block);
-            setP (q, "master", 0.0f); setP (q, "ampS", 1.0f); setP (q, "o1_uniVoices", 3.0f); setP (q, "o1_uniDetune", 30.0f);
+            setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f); setP (q, "o1_uniVoices", 3.0f); setP (q, "o1_uniDetune", 30.0f);
             setP (q, "o1_pan", 30.0f); setP (q, "o1_bassMono", 1.0f); setP (q, "hm_stretch", stretchAmt);
             q.prepareToPlay (sr, block);
             juce::AudioBuffer<float> out (2, block * 120), buf (2, block);
@@ -2817,7 +2817,7 @@ int main (int argc, char** argv)
             {
                 ElukkaAudioProcessor q;
                 q.setPlayConfigDetails (0, 2, sr, block);
-                setP (q, "master", 0.0f); setP (q, "ampS", 1.0f); setP (q, "o1_uniVoices", 3.0f); setP (q, "o1_uniDetune", 30.0f);
+                setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f); setP (q, "o1_uniVoices", 3.0f); setP (q, "o1_uniDetune", 30.0f);
                 setP (q, "o1_pan", 30.0f); setP (q, "o1_bassMono", 1.0f); setP (q, "hm_stretch", st);
                 q.prepareToPlay (sr, block);
                 juce::AudioBuffer<float> out (2, block * blocks), buf (2, block);
@@ -2876,7 +2876,7 @@ int main (int argc, char** argv)
         {
             ElukkaAudioProcessor q;
             q.setPlayConfigDetails (0, 2, sr, block);
-            setP (q, "master", 0.0f); setP (q, "ampS", 1.0f); setP (q, "o1_uniVoices", 7.0f);
+            setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f); setP (q, "o1_uniVoices", 7.0f);
             if (mangle >= 1) setP (q, "hm_prism", 50.0f);   // default band: 2 octaves around harmonic 8
             if (mangle >= 2) setP (q, "hm_shimmer", 30.0f);
             double cpu = 0.0;
@@ -2897,7 +2897,7 @@ int main (int argc, char** argv)
             host.bpm = 140.0; host.playing = true;
             q.setPlayHead (&host);
             q.setPlayConfigDetails (0, 2, sr, block);
-            setP (q, "master", 0.0f); setP (q, "ampS", 1.0f); setP (q, "m1_smooth", 0.0f);
+            setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f); setP (q, "m1_smooth", 0.0f);
             setP (q, "m1_mode", 0.0f); setP (q, "m1_sync", 1.0f); setP (q, "m1_syncRate", (float) P::syncRateIndex (16.0f));   // 4 bars
             setP (q, "m1_retrig", retrig ? 1.0f : 0.0f);
             q.shapes[0].setPoints (ModShape::preset (3));   // saw up: value = position in the 4 bars
@@ -2967,7 +2967,7 @@ int main (int argc, char** argv)
         // The same through the synth: note off at 0.2 s, the sound is still there 0.3 s later
         ElukkaAudioProcessor q;
         q.setPlayConfigDetails (0, 2, sr, block);
-        setP (q, "o1_wave", (float) P::WSine); setP (q, "master", 0.0f);
+        setP (q, "o1_wave", (float) P::WSine); setP (q, "master", unityMasterDb);
         setP (q, "ampA", 0.001f); setP (q, "ampD", 2.0f); setP (q, "ampS", 0.0f); setP (q, "ampR", 1.0f);
         q.prepareToPlay (sr, block);
         juce::AudioBuffer<float> buf (2, block);
@@ -2994,7 +2994,7 @@ int main (int argc, char** argv)
         {
             ElukkaAudioProcessor m;
             m.setPlayConfigDetails (0, 2, sr, block);
-            setP (m, "master", 0.0f); setP (m, "ampS", 1.0f);
+            setP (m, "master", unityMasterDb); setP (m, "ampS", 1.0f);
             setP (m, "m1_mode", 0.0f); setP (m, "m1_sync", 1.0f); setP (m, "m1_syncRate", (float) P::syncRateIndex (beats));
             m.shapes[0].setPoints (ModShape::preset (3));   // saw up: count the wraps
             setP (m, "macro1", 1.0f);
@@ -3086,7 +3086,7 @@ int main (int argc, char** argv)
     {
         ElukkaAudioProcessor q;
         q.setPlayConfigDetails (0, 2, sr, block);
-        setP (q, "comb_on", 1.0f); setP (q, "master", 0.0f);
+        setP (q, "comb_on", 1.0f); setP (q, "master", unityMasterDb);
         q.prepareToPlay (sr, block);
         juce::AudioBuffer<float> buf (2, block);
         float lastRms = 0.0f;
@@ -3252,7 +3252,7 @@ int main (int argc, char** argv)
             FakePlayHead fph; fph.playing = false; fph.bpm = 120.0;
             q.setPlayHead (&fph);
             q.setPlayConfigDetails (0, 2, sr, block);
-            setP (q, "o1_wave", (float) P::WSine); setP (q, "o1_level", 0.5f); setP (q, "master", 0.0f);
+            setP (q, "o1_wave", (float) P::WSine); setP (q, "o1_level", 0.5f); setP (q, "master", unityMasterDb);
             setP (q, "ampA", 0.001f); setP (q, "ampD", 0.01f); setP (q, "ampS", 0.0f); setP (q, "ampR", 0.01f);
             setP (q, "dly_on", 1.0f); setP (q, "dly_sync", 1.0f); setP (q, "dly_div", 0.0f); setP (q, "dly_mix", 1.0f); setP (q, "dly_fb", 0.0f);
             setP (q, "dly_pp", 0.0f);
@@ -3279,7 +3279,7 @@ int main (int argc, char** argv)
             auto qp = std::make_unique<ElukkaAudioProcessor>();
             auto& q = *qp;
             q.setPlayConfigDetails (0, 2, sr, block);
-            setP (q, "o1_wave", (float) P::WSine); setP (q, "o1_level", 0.5f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f);
+            setP (q, "o1_wave", (float) P::WSine); setP (q, "o1_level", 0.5f); setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f);
             setP (q, "m3_mode", 0.0f); setP (q, "m3_rate", 4.0f);
             q.shapes[2].setPoints (ModShape::preset (4));   // square
             setP (q, "mx1_src", (float) P::SrcMod3); setP (q, "mx1_dst", (float) dst); setP (q, "mx1_amt", -0.8f);
@@ -3333,7 +3333,7 @@ int main (int argc, char** argv)
             auto qp = std::make_unique<ElukkaAudioProcessor>();
             auto& q = *qp;
             q.setPlayConfigDetails (0, 2, sr, block);
-            setP (q, "o1_wave", (float) P::WSine); setP (q, "o1_level", 0.5f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f);
+            setP (q, "o1_wave", (float) P::WSine); setP (q, "o1_level", 0.5f); setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f);
             setP (q, "rs_sync", 0.0f); setP (q, "rs_speed", 1.0f); setP (q, "rs_loop", 1.0f);
             setP (q, "rsl_smooth", smoothMs); setP (q, "rsl_gain", gain); setP (q, "rsl_floor", -48.0f);
             if (mapDst != P::DstNone) { setP (q, "mx1_src", (float) P::SrcRsLevel); setP (q, "mx1_dst", (float) mapDst); setP (q, "mx1_amt", -1.0f); }
@@ -3394,7 +3394,7 @@ int main (int argc, char** argv)
                 auto qp = std::make_unique<ElukkaAudioProcessor>();
                 auto& q = *qp;
                 q.setPlayConfigDetails (0, 2, sr, block);
-                setP (q, "o1_wave", (float) P::WResynth); setP (q, "o1_level", 1.0f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f); setP (q, "ampR", 0.4f);
+                setP (q, "o1_wave", (float) P::WResynth); setP (q, "o1_level", 1.0f); setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f); setP (q, "ampR", 0.4f);
                 setP (q, "rs_sync", 0.0f); setP (q, "rs_loop", 0.0f);
                 setP (q, "polyMode", mode == 1 ? 1.0f : 0.0f);
                 setP (q, "dist_on", 1.0f); setP (q, "dist_drive", 0.0f); setP (q, "dist_mix", 1.0f);
@@ -3446,7 +3446,7 @@ int main (int argc, char** argv)
                 auto qp = std::make_unique<ElukkaAudioProcessor>();
                 auto& q = *qp;
                 q.setPlayConfigDetails (0, 2, sr, block);
-                setP (q, "o1_wave", (float) P::WResynth); setP (q, "o1_level", 1.0f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f); setP (q, "ampR", 0.4f);
+                setP (q, "o1_wave", (float) P::WResynth); setP (q, "o1_level", 1.0f); setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f); setP (q, "ampR", 0.4f);
                 setP (q, "rs_sync", 0.0f); setP (q, "rs_loop", 0.0f);
                 setP (q, dd.on, 1.0f);
                 if (dd.baseId != nullptr) setP (q, dd.baseId, dd.base);
@@ -3509,7 +3509,7 @@ int main (int argc, char** argv)
             auto qp = std::make_unique<ElukkaAudioProcessor>();
             auto& q = *qp;
             q.setPlayConfigDetails (0, 2, sr, block);
-            setP (q, "o1_wave", (float) P::WSine); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f); setP (q, "ampR", 1.0f);
+            setP (q, "o1_wave", (float) P::WSine); setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f); setP (q, "ampR", 1.0f);
             setP (q, "polyMode", 1.0f);   // Mono
             setP (q, "rs_sync", 0.0f); setP (q, "rs_speed", 1.0f); setP (q, "rs_loop", 0.0f);
             setP (q, "rsl_smooth", 20.0f); setP (q, "rsl_gain", 100.0f); setP (q, "rsl_floor", -48.0f);
@@ -3560,7 +3560,7 @@ int main (int argc, char** argv)
                 auto qp = std::make_unique<ElukkaAudioProcessor>();
                 auto& q = *qp;
                 q.setPlayConfigDetails (0, 2, sr, block);
-                setP (q, "o1_wave", (float) P::WSaw); setP (q, "o1_level", 0.5f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f); setP (q, "ampR", 0.005f);
+                setP (q, "o1_wave", (float) P::WSaw); setP (q, "o1_level", 0.5f); setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f); setP (q, "ampR", 0.005f);
                 setP (q, "polyMode", (float) polyMode);
                 setP (q, "rs_sync", 0.0f); setP (q, "rs_loop", 0.0f); setP (q, "rsl_smooth", smoothMs);
                 if (dst == P::DstFxfCutoff) { setP (q, "fxf_on", 1.0f); setP (q, "fxf_cutoff", 300.0f); }
@@ -3705,7 +3705,7 @@ int main (int argc, char** argv)
         FakePlayHead fph; fph.playing = false; fph.bpm = 120.0;
         q.setPlayHead (&fph);
         q.setPlayConfigDetails (0, 2, sr, block);
-        setP (q, "o1_wave", (float) P::WSaw); setP (q, "o1_level", 0.5f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f);
+        setP (q, "o1_wave", (float) P::WSaw); setP (q, "o1_level", 0.5f); setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f);
         setP (q, "flt_cutoff", 400.0f); setP (q, "flt_res", 0.0f);
         setP (q, "ampR", 0.005f);   // no tail from the previous step under the next one (C3's 2nd harmonic is C4's fundamental)
         // balance (dB) of the 3rd harmonic against the fundamental in [t0, t0 + 0.15 s]
@@ -3770,7 +3770,7 @@ int main (int argc, char** argv)
         auto qp = std::make_unique<ElukkaAudioProcessor>();
         auto& q = *qp;
         q.setPlayConfigDetails (0, 2, sr, block);
-        setP (q, "o1_wave", (float) P::WSine); setP (q, "o1_level", 0.5f); setP (q, "master", 0.0f); setP (q, "ampS", 1.0f);
+        setP (q, "o1_wave", (float) P::WSine); setP (q, "o1_level", 0.5f); setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f);
         auto level = [&] (int note, float hz) { return juce::Decibels::gainToDecibels (measure (renderNotes (q, { note }, 1.6), 0, hz).first, -140.0f); };
         const float dryLo = level (45, 110.0f), dryHi = level (93, 1760.0f);
         setP (q, "fxf_on", 1.0f); setP (q, "fxf_cutoff", 500.0f);
@@ -3876,7 +3876,7 @@ int main (int argc, char** argv)
         {
             ElukkaAudioProcessor q;
             q.setPlayConfigDetails (0, 2, sr, block);
-            setP (q, "master", 0.0f);
+            setP (q, "master", unityMasterDb);
             auto firstMs = [&] (const char* fx)
             {
                 setP (q, "dly_on", 0.0f); setP (q, "rev_on", 0.0f);

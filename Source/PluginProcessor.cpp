@@ -478,7 +478,10 @@ void ElukkaAudioProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
     for (int i = 0; i < P::NumFx; ++i) order[(size_t) i] = fxOrder[(size_t) i].load();
     fx.process (L, R, num, f, bpm, order);
 
-    const float master = juce::Decibels::decibelsToGain (applyMod (destRanges[P::DstMaster], pMaster->load(), off[P::DstMaster]), -48.0f);
+    // The output sits 6 dB (x2) above the Master knob's reading: the engine's headroom left the synth quiet next to
+    // other instruments (factory presets peaked around -11 dBFS on a chord).
+    constexpr float outputGain = 2.0f;
+    const float master = outputGain * juce::Decibels::decibelsToGain (applyMod (destRanges[P::DstMaster], pMaster->load(), off[P::DstMaster]), -48.0f);
     // ramp the master gain across the chunk so modulating it never steps
     const float masterStart = lastMasterGain < 0.0f ? master : lastMasterGain;
     const float masterInc = (master - masterStart) / (float) num;
