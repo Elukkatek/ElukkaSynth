@@ -115,6 +115,10 @@ private:
     std::atomic<float> *distOn {}, *distType {}, *distDrive {}, *distMix {}, *combOn {}, *combFreq {}, *combFb {}, *combMix {};
     std::atomic<float> *eqOn {}, *eqLow {}, *eqMidF {}, *eqMid {}, *eqHigh {}, *dlyOn {}, *dlyDiv {}, *dlyFb {}, *dlyMix {}, *dlyPp {};
     std::atomic<float>* sqRetrig {};
+    std::atomic<float>* sqKeepRs {};
+    // Continue Sample: the sequencer's own resynth playhead (source seconds), restarted by a MIDI note-on and running
+    // between steps; each sequencer note starts its sample here
+    double seqRsTime = 0.0;
     std::atomic<float> *fxfOn {}, *fxfType {}, *fxfSlope {}, *fxfCutoff {}, *fxfRes {}, *fxfDrive {};
     std::atomic<float> *revOn {}, *revSize {}, *revDecay {}, *revTone {}, *revMod {}, *revMode {}, *revMix {}, *macro1 {}, *macro2 {};
     std::atomic<float> *eqLowF {}, *eqLowQ {}, *eqMidQ {}, *eqHighF {}, *eqHighQ {};

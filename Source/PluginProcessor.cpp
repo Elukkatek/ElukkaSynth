@@ -107,7 +107,7 @@ void ElukkaAudioProcessor::cacheParams()
     rsPos = raw ("rs_pos"); rsLoop = raw ("rs_loop");
     fxfOn = raw ("fxf_on"); fxfType = raw ("fxf_type"); fxfSlope = raw ("fxf_slope");
     fxfCutoff = raw ("fxf_cutoff"); fxfRes = raw ("fxf_res"); fxfDrive = raw ("fxf_drive");
-    sqOn = raw ("sq_on"); sqRetrig = raw ("sq_retrig"); sqRate = raw ("sq_rate"); sqGate = raw ("sq_gate"); sqSlide = raw ("sq_slide"); sqAccent = raw ("sq_accent");
+    sqOn = raw ("sq_on"); sqRetrig = raw ("sq_retrig"); sqKeepRs = raw ("sq_keeprs"); sqRate = raw ("sq_rate"); sqGate = raw ("sq_gate"); sqSlide = raw ("sq_slide"); sqAccent = raw ("sq_accent");
     distOn = raw ("dist_on"); distType = raw ("dist_type"); distDrive = raw ("dist_drive"); distMix = raw ("dist_mix");
     combOn = raw ("comb_on"); combFreq = raw ("comb_freq"); combFb = raw ("comb_fb"); combMix = raw ("comb_mix");
     eqOn = raw ("eq_on"); eqLow = raw ("eq_low"); eqMidF = raw ("eq_midF"); eqMid = raw ("eq_mid"); eqHigh = raw ("eq_high");
@@ -287,7 +287,7 @@ void ElukkaAudioProcessor::voiceOn (int note, float vel, bool legato, float glid
         {
             if (voices[seqVoice].held) voices[seqVoice].release();
             seqVoice = findVoice();
-            voices[seqVoice].start (note, vel, ctx, glideSec, false);
+            voices[seqVoice].start (note, vel, ctx, glideSec, false, on (sqKeepRs) ? seqRsTime : -1.0);
             for (int i = 0; i < P::numMods; ++i) globalMods[i].trigger (ctx.mod[i], rng, globalMods[i].getPhase());
         }
         voices[seqVoice].age = ++ageCounter;
@@ -331,6 +331,7 @@ void ElukkaAudioProcessor::handleMidi (const juce::MidiMessage& m)
         if (seqOn)
         {
             if (on (sqRetrig)) seq.retrigger();
+            seqRsTime = ctx.resynth != nullptr ? juce::jlimit (0.0f, 1.0f, ctx.rsPos) * ctx.resynth->durationSec : 0.0;   // a played note restarts the sample
             return;
         }
         const bool legato = mode == 2 && heldNotes.size() > 1;
@@ -417,6 +418,13 @@ void ElukkaAudioProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
 
     for (auto& v : voices)
         if (v.active) v.render (L, R, num, ctx);
+    // Continue Sample: the sequencer's playhead keeps running, at the Speed (and Sync) the voices play the sample at
+    if (ctx.resynth != nullptr && on (sqOn) && on (sqKeepRs))
+    {
+        const double dur = ctx.resynth->durationSec;
+        seqRsTime += ctx.rsSpeed * (ctx.rsSync ? ctx.hostBpm / juce::jmax (1.0f, ctx.rsBpm) : 1.0) * num / sr;
+        if (ctx.rsLoop && dur > 0.0 && seqRsTime >= dur) seqRsTime = std::fmod (seqRsTime, dur);
+    }
     // Resynth Level for the effects: the newest voice's, read after the voices updated it this chunk. When the newest
     // voice changes (a new note, or the last one ending) the step from the old value fades out over 5 ms, so a mapped
     // effect never jumps while the previous note still rings through it; after that it is the new note's curve exactly.

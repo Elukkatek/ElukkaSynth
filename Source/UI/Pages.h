@@ -278,7 +278,7 @@ public:
 private:
     ElukkaAudioProcessor& proc;
     Panel controls { "SEQUENCER" };
-    Toggle on, retrig;
+    Toggle on, retrig, keepRs;
     Choice rate;
     Knob gate, slide, accent;
     juce::ComboBox patternBox;

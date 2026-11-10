@@ -334,6 +334,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     // Sequencer
     addB ("sq_on", "Sequencer On", false);
     addB ("sq_retrig", "Sequencer Retrigger", false);   // on: every new note restarts the pattern from its start step
+    addB ("sq_keeprs", "Seq Continue Sample", false);   // on: sequencer steps continue the resynth sample; a MIDI note restarts it
     addC ("sq_rate", "Sequencer Rate", seqRates, 1);
     addF ("sq_gate", "Sequencer Gate", { 0.05f, 1.0f }, 0.5f);
     addF ("sq_slide", "Slide Time", skewed (0.005f, 0.5f, 0.06f), 0.06f, "s");

@@ -3540,6 +3540,154 @@ int main (int argc, char** argv)
                       << juce::String (traces[0][0], 3) << ", largest difference from the first note's attack " << juce::String (worst, 3) << "\n";
         }
 
+        // Sequencer Continue Sample: the sample keeps playing through the sequencer's steps (each step starts its note
+        // where the sequencer's playhead is), and a new MIDI note restarts it. The source fades in from -48 dB over 2 s,
+        // so Resynth Level (Smooth 0, Floor -48 dB) reads the playhead directly: level = sample time / 2 s.
+        {
+            juce::AudioBuffer<float> ramp (1, (int) (2.0 * sr));
+            for (int i = 0; i < ramp.getNumSamples(); ++i)
+            {
+                const float t = (float) i / (float) sr;
+                ramp.setSample (0, i, 0.5f * juce::Decibels::decibelsToGain (-48.0f + 24.0f * t) * std::sin (juce::MathConstants<float>::twoPi * 220.0f * t));
+            }
+            auto rampData = ResynthData::fromAudio (ramp, sr, "ramp");
+            // the sample time each of the first 6 steps reads 100 ms into the step, then (after the key is pressed again
+            // at 1 s) 100 ms into the next step
+            auto run = [&] (bool keep)
+            {
+                auto qp = std::make_unique<ElukkaAudioProcessor>();
+                auto& q = *qp;
+                q.setPlayConfigDetails (0, 2, sr, block);
+                setP (q, "o1_wave", (float) P::WResynth); setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f); setP (q, "ampR", 0.3f);
+                setP (q, "rs_sync", 0.0f); setP (q, "rs_loop", 0.0f); setP (q, "rs_speed", 1.0f);
+                setP (q, "rsl_smooth", 0.0f); setP (q, "rsl_gain", 100.0f); setP (q, "rsl_floor", -48.0f);
+                setP (q, "sq_on", 1.0f); setP (q, "sq_rate", 1.0f); setP (q, "sq_gate", 0.5f); setP (q, "sq_keeprs", keep ? 1.0f : 0.0f);
+                q.setResynth (rampData);
+                q.prepareToPlay (sr, block);
+                juce::AudioBuffer<float> buf (2, block);
+                std::vector<float> times;
+                const double step = 0.125;   // 1/16 at 120 BPM
+                std::vector<double> at;
+                for (int k = 0; k < 6; ++k) at.push_back (k * step + 0.1);
+                at.push_back (1.0 + 0.1);
+                size_t next = 0;
+                const int repress = (int) (1.0 * sr);
+                for (int pos = 0; pos < (int) (1.3 * sr); pos += block)
+                {
+                    juce::MidiBuffer midi;
+                    if (pos == 0) midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                    if (repress >= pos && repress < pos + block)
+                    {
+                        midi.addEvent (juce::MidiMessage::noteOff (1, 60), repress - pos);
+                        midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), repress - pos);
+                    }
+                    buf.clear();
+                    q.processBlock (buf, midi);
+                    if (next < at.size() && pos + block >= (int) (at[next] * sr)) { times.push_back (q.uiRsLevel.load() * 2.0f); ++next; }
+                }
+                return times;
+            };
+            const auto restart = run (false), keep = run (true);
+            bool ok = restart.size() == 7 && keep.size() == 7;
+            juce::String rep;
+            if (ok)
+            {
+                // off: every step reads ~0.1 s into the sample; on: step k reads ~k * 0.125 + 0.1 s; after the key is
+                // pressed again it is back at ~0.1 s
+                for (int k = 0; k < 6; ++k)
+                {
+                    ok &= std::abs (restart[(size_t) k] - 0.1f) < 0.03f;
+                    ok &= std::abs (keep[(size_t) k] - (0.125f * (float) k + 0.1f)) < 0.03f;
+                }
+                ok &= std::abs (keep[6] - 0.1f) < 0.03f && std::abs (restart[6] - 0.1f) < 0.03f;
+                for (int k = 0; k < 7; ++k) rep << juce::String (restart[(size_t) k], 2) << (k < 6 ? " " : "");
+                rep << " s; on: ";
+                for (int k = 0; k < 7; ++k) rep << juce::String (keep[(size_t) k], 2) << (k < 6 ? " " : "");
+            }
+            if (! ok) ++failures;
+            std::cout << (ok ? "ok   " : "FAIL ") << "Sequencer Continue Sample: sample time 100 ms into steps 1-6 and after the key is pressed again: off: " << rep << " s\n";
+        }
+
+        // Looping without clicks: sources that neither start nor end in silence, one a seamless loop (whole cycles), two
+        // not (the source itself jumps where its end meets its start). Around each loop point the output may be no
+        // rougher (worst |second difference| from 3 ms before to 12 ms after, against the 200 ms before) than a few times
+        // a steady passage. Read as silence past its ends, the analysis heard an onset at the start and a stop at the
+        // end, and every loop clicked (a sine scored ~130 against 1.6 steady).
+        {
+            auto makeSrc = [&] (int kind)
+            {
+                juce::AudioBuffer<float> b (2, (int) (1.0 * sr) + 377);   // not a whole number of cycles
+                juce::Random rr (3);
+                for (int i = 0; i < b.getNumSamples(); ++i)
+                {
+                    const float t = (float) i / (float) sr;
+                    float v = 0.0f;
+                    if (kind == 0) v = 0.4f * std::sin (juce::MathConstants<float>::twoPi * 220.0f * t);
+                    else if (kind == 1) { for (int h = 1; h <= 30; ++h) v += 0.3f / (float) h * std::sin (juce::MathConstants<float>::twoPi * 110.0f * (float) h * t); }
+                    else { for (float f : { 196.0f, 246.9f, 293.7f }) for (int h = 1; h <= 8; ++h) v += 0.12f / (float) h * std::sin (juce::MathConstants<float>::twoPi * f * (float) h * t); v += 0.03f * (rr.nextFloat() * 2.0f - 1.0f); }
+                    b.setSample (0, i, v); b.setSample (1, i, v);
+                }
+                return b;
+            };
+            auto seamless = [&] (bool saw)
+            {
+                juce::AudioBuffer<float> b (2, (int) sr);   // 1 s of 240 Hz at 48 kHz: exactly 240 cycles, a perfect loop
+                for (int i = 0; i < b.getNumSamples(); ++i)
+                {
+                    const double ph = 240.0 * i / sr;
+                    float v = 0.0f;
+                    if (! saw) v = 0.4f * (float) std::sin (juce::MathConstants<double>::twoPi * ph);
+                    else for (int h = 1; h <= 30; ++h) v += 0.3f / (float) h * (float) std::sin (juce::MathConstants<double>::twoPi * ph * h);
+                    b.setSample (0, i, v); b.setSample (1, i, v);
+                }
+                return b;
+            };
+            std::vector<std::pair<juce::String, juce::AudioBuffer<float>>> srcs { { "seamless sine", seamless (false) }, { "sine", makeSrc (0) }, { "saw", makeSrc (1) } };
+            bool loopOk = true;
+            juce::String loopRep;
+            for (auto& [name, src] : srcs)
+            {
+                auto d = ResynthData::fromAudio (src, sr, name);
+                auto qp = std::make_unique<ElukkaAudioProcessor>();
+                auto& q = *qp;
+                q.setPlayConfigDetails (0, 2, sr, block);
+                setP (q, "o1_wave", (float) P::WResynth); setP (q, "o1_level", 1.0f); setP (q, "master", unityMasterDb); setP (q, "ampS", 1.0f); setP (q, "ampA", 0.001f);
+                setP (q, "rs_sync", 0.0f); setP (q, "rs_loop", 1.0f); setP (q, "rs_speed", 1.0f);
+                q.setResynth (d);
+                q.prepareToPlay (sr, block);
+                const double dur = d->durationSec;
+                const int total = (int) ((3.0 * dur + 0.3) * sr);
+                juce::AudioBuffer<float> out (2, total), buf (2, block);
+                out.clear();
+                for (int pos = 0; pos + block <= total; pos += block)
+                {
+                    juce::MidiBuffer midi;
+                    if (pos == 0) midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 127), 0);   // middle C plays the source at its own pitch
+                    buf.clear();
+                    q.processBlock (buf, midi);
+                    for (int ch = 0; ch < 2; ++ch) out.copyFrom (ch, pos, buf, ch, 0, block);
+                }
+                auto rough = [&] (const float* x, int lp, int len)
+                {
+                    float peak = 0.0f; double ref = 0.0; int nr = 0;
+                    for (int i = lp - (int) (0.003 * sr); i < lp + (int) (0.012 * sr); ++i) if (i > 0 && i + 1 < len) peak = std::max (peak, std::abs (x[i + 1] - 2.0f * x[i] + x[i - 1]));
+                    for (int i = lp - (int) (0.25 * sr); i < lp - (int) (0.05 * sr); ++i) if (i > 0 && i + 1 < len) { ref += std::abs (x[i + 1] - 2.0f * x[i] + x[i - 1]); ++nr; }
+                    return peak / (float) juce::jmax (1.0e-9, ref / juce::jmax (1, nr));
+                };
+                const float steady = rough (out.getReadPointer (0), (int) (1.5 * dur * sr), total);
+                loopRep << name << ": steady " << juce::String (steady, 1) << ", loop points";
+                for (int k = 1; k <= 2; ++k)
+                {
+                    const float r = rough (out.getReadPointer (0), (int) std::lround (k * dur * sr), total);
+                    loopOk &= r < 4.0f * steady;
+                    loopRep << " " << juce::String (r, 1);
+                }
+                loopRep << "; ";
+            }
+            if (! loopOk) ++failures;
+            std::cout << (loopOk ? "ok   " : "FAIL ") << "Resynth loops without clicks (roughness at the loop point vs a steady passage): " << loopRep << "\n";
+        }
+
         // Every note sounds the same. Resynth Level is a function of the playhead alone, mapped here to a voice destination
         // (Osc 1 Level, also in Mono) and to an effect (FX Filter Cutoff). With notes starting on the same position in the
         // host's blocks every note must be bit-identical. With notes starting anywhere in the blocks (every 0.3 s, not a

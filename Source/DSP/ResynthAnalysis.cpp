@@ -53,6 +53,84 @@ float hannLobe (float x)
     return std::abs (s / (1.0f - ax * ax));
 }
 
+// ---- edges ----
+//
+// The analysis windows reach up to half their length beyond the source's ends. Read as silence there, a source that
+// does not start or end in silence looks like a tone starting and stopping abruptly: the edge frames get an onset
+// (levels ramping, spurious partials across the spectrum), which plays as a click wherever the source loops. Instead
+// the source is continued past each end by linear prediction (Burg's method) learnt from the audio just inside it:
+// steady tones carry on with their own frequencies and phases, so the edge frames see what is actually sounding
+// there; a source that starts or ends in silence continues as silence, exactly as before.
+
+// Prediction coefficients a[0..order] (a[0] = 1, x[n] = -sum a[i] x[n - i]) by Burg's method; empty when x is silent.
+std::vector<double> burg (const float* x, int n, int order)
+{
+    std::vector<double> f (x, x + n), b (f), a ((size_t) order + 1, 0.0);
+    a[0] = 1.0;
+    double den = 0.0;
+    for (int i = 0; i < n; ++i) den += 2.0 * f[(size_t) i] * f[(size_t) i];
+    den -= f[0] * f[0] + b[(size_t) n - 1] * b[(size_t) n - 1];
+    if (den < 1.0e-12 * n) return {};
+    for (int k = 0; k < order; ++k)
+    {
+        double mu = 0.0;
+        for (int i = 0; i < n - k - 1; ++i) mu += f[(size_t) (i + k + 1)] * b[(size_t) i];
+        mu *= -2.0 / den;
+        for (int i = 0; i <= (k + 1) / 2; ++i)
+        {
+            const double t1 = a[(size_t) i] + mu * a[(size_t) (k + 1 - i)], t2 = a[(size_t) (k + 1 - i)] + mu * a[(size_t) i];
+            a[(size_t) i] = t1;
+            a[(size_t) (k + 1 - i)] = t2;
+        }
+        for (int i = 0; i < n - k - 1; ++i)
+        {
+            const double t1 = f[(size_t) (i + k + 1)] + mu * b[(size_t) i], t2 = b[(size_t) i] + mu * f[(size_t) (i + k + 1)];
+            f[(size_t) (i + k + 1)] = t1;
+            b[(size_t) i] = t2;
+        }
+        den = (1.0 - mu * mu) * den - f[(size_t) (k + 1)] * f[(size_t) (k + 1)] - b[(size_t) (n - k - 2)] * b[(size_t) (n - k - 2)];
+        if (den <= 0.0) break;
+    }
+    return a;
+}
+
+// count samples continuing x[0..n) forwards (backwards = false) or before its start (backwards = true)
+std::vector<float> extrapolate (const float* x, int n, int count, bool backwards)
+{
+    constexpr int order = 64;
+    const int train = juce::jmin (n, 4096);
+    std::vector<float> seg ((size_t) train);
+    for (int i = 0; i < train; ++i) seg[(size_t) i] = backwards ? x[train - 1 - i] : x[n - train + i];
+    std::vector<float> out ((size_t) count, 0.0f);
+    if (train <= order * 2) return out;
+    const auto a = burg (seg.data(), train, order);
+    if (a.empty()) return out;
+    std::vector<double> hist (seg.end() - order, seg.end());   // the last `order` samples, oldest first
+    float peak = 0.0f;
+    for (int i = 0; i < train; ++i) peak = juce::jmax (peak, std::abs (seg[(size_t) i]));
+    for (int i = 0; i < count; ++i)
+    {
+        double y = 0.0;
+        for (int k = 1; k <= order; ++k) y -= a[(size_t) k] * hist[(size_t) (order - k)];
+        y = juce::jlimit (-2.0 * peak, 2.0 * peak, y);   // a safety net: the prediction never runs away
+        hist.erase (hist.begin());
+        hist.push_back (y);
+        out[(size_t) (backwards ? count - 1 - i : i)] = (float) y;
+    }
+    return out;
+}
+
+// [pad samples before | x | pad samples after]
+std::vector<float> extendEdges (const float* x, int n, int pad)
+{
+    std::vector<float> v ((size_t) (n + 2 * pad), 0.0f);
+    const auto pre = extrapolate (x, n, pad, true), post = extrapolate (x, n, pad, false);
+    std::copy (pre.begin(), pre.end(), v.begin());
+    std::copy (x, x + n, v.begin() + pad);
+    std::copy (post.begin(), post.end(), v.begin() + pad + n);
+    return v;
+}
+
 // One analysis resolution: FFT, window and the spectra of both channels for the current frame.
 struct Stft
 {
@@ -71,13 +149,14 @@ struct Stft
         L.resize ((size_t) size * 2);
         R.resize ((size_t) size * 2);
     }
-    // windows the signals around `centre` (zero outside) and transforms them
-    void analyse (const float* l, const float* r, int len, int centre)
+    // windows the signals around `centre` and transforms them; the signals may be read `pad` samples beyond both ends
+    // (the source's extrapolated continuation, see extendEdges), zero further out
+    void analyse (const float* l, const float* r, int len, int centre, int pad = 0)
     {
         for (int i = 0; i < size; ++i)
         {
             const int idx = centre - size / 2 + i;
-            const bool in = idx >= 0 && idx < len;
+            const bool in = idx >= -pad && idx < len + pad;
             L[(size_t) i] = in ? l[idx] * window[(size_t) i] : 0.0f;
             R[(size_t) i] = in ? r[idx] * window[(size_t) i] : 0.0f;
         }
@@ -286,7 +365,7 @@ void fillInactive (ResynthData& d)
 }
 
 // Envelope timing (file comment, step 4).
-void correctEnvelopes (ResynthData& d, const float* L, const float* R, int len, double sampleRate, int hop, const Settings& st)
+void correctEnvelopes (ResynthData& d, const float* L, const float* R, int len, int pad, double sampleRate, int hop, const Settings& st)
 {
     constexpr int numBands = 18;   // half octaves from 40 Hz
     auto bandPos = [] (float hz) { return std::log2 (juce::jmax (40.0f, hz) / 40.0f) * 2.0f; };
@@ -315,7 +394,7 @@ void correctEnvelopes (ResynthData& d, const float* L, const float* R, int len, 
         for (int w = 0; w < 2; ++w)
         {
             auto& m = maps[w];
-            stfts[w].analyse (L, R, len, fr * hop);
+            stfts[w].analyse (L, R, len, fr * hop, pad);
             for (int k = 1; k < m.N / 2; ++k)
             {
                 const int b = m.bandOfBin[(size_t) k];
@@ -441,7 +520,7 @@ void renderModel (const ResynthData& d, int hop, int len, std::vector<float>& ou
 }
 
 // Residual noise spectrogram (file comment, step 5).
-void analyseResidual (ResynthData& d, const float* L, const float* R, int len, double sampleRate, int hop, const Settings& st)
+void analyseResidual (ResynthData& d, const float* L, const float* R, int len, int pad, double sampleRate, int hop, const Settings& st)
 {
     constexpr int B = ResynthData::numNoiseBands;
     const int F = d.numFrames;
@@ -478,7 +557,7 @@ void analyseResidual (ResynthData& d, const float* L, const float* R, int len, d
     for (int fr = 0; fr < F; ++fr)
     {
         const int centre = fr * hop;
-        src.analyse (L, R, len, centre);
+        src.analyse (L, R, len, centre, pad);
         mod.analyse (mL.data(), mR.data(), len, centre);
         res.analyse (rL.data(), rR.data(), len, centre);
         cr.fill (0.0); ci.fill (0.0); eL.fill (0.0); eR.fill (0.0); count.fill (0);
@@ -1021,8 +1100,8 @@ std::shared_ptr<ResynthData> ResynthData::fromAudio (const juce::AudioBuffer<flo
     d->sourceAudio.setSize (channels, len);
     for (int ch = 0; ch < channels; ++ch)
         d->sourceAudio.copyFrom (ch, 0, buffer, ch, 0, len);
-    const float* L = d->sourceAudio.getReadPointer (0);
-    const float* R = d->sourceAudio.getReadPointer (channels > 1 ? 1 : 0);
+    const float* srcL = d->sourceAudio.getReadPointer (0);
+    const float* srcR = d->sourceAudio.getReadPointer (channels > 1 ? 1 : 0);
 
     // Resolutions and the frequency ranges they own (window lengths double above 60 kHz)
     struct Res { int order; float lo, hi; };
@@ -1032,6 +1111,11 @@ std::shared_ptr<ResynthData> ResynthData::fromAudio (const juce::AudioBuffer<flo
                                  { 11 + base, 500.0f, (float) (sampleRate * 0.48) } };   // 2048
     std::vector<Stft> stfts (res.size());
     for (size_t i = 0; i < res.size(); ++i) stfts[i].init (res[i].order);
+    // the source continued past both ends by half the longest window (see extendEdges); L and R point at its start
+    const int pad = (1 << res.front().order) / 2;
+    const auto extL = extendEdges (srcL, len, pad), extR = channels > 1 ? extendEdges (srcR, len, pad) : extL;
+    const float* L = extL.data() + pad;
+    const float* R = extR.data() + pad;
 
     const int hop = juce::jmax (64, (int) std::lround (sampleRate * st.hopSec));
     const double dt = hop / sampleRate;
@@ -1062,7 +1146,7 @@ std::shared_ptr<ResynthData> ResynthData::fromAudio (const juce::AudioBuffer<flo
         const int centre = fr * hop;
         for (size_t i = 0; i < res.size(); ++i)
         {
-            stfts[i].analyse (L, R, len, centre);
+            stfts[i].analyse (L, R, len, centre, pad);
             findPeaks (stfts[i], sampleRate, res[i].lo, res[i].hi, (int) i, peaks);
         }
 
@@ -1151,10 +1235,10 @@ std::shared_ptr<ResynthData> ResynthData::fromAudio (const juce::AudioBuffer<flo
     removeShortTracks (*d, st.minTrackFrames);
     intervalFrequencies (*d, peakFreq, dt);
     smoothIntervalFrequencies (*d, st.smoothLoCents, st.smoothHiCents);
-    correctEnvelopes (*d, L, R, len, sampleRate, hop, st);
+    correctEnvelopes (*d, L, R, len, pad, sampleRate, hop, st);
     constantStereoPhase (*d);
     fillInactive (*d);
-    analyseResidual (*d, L, R, len, sampleRate, hop, st);
+    analyseResidual (*d, L, R, len, pad, sampleRate, hop, st);
 
     d->maxAmp = 1.0e-9f;
     for (auto a : d->amp) d->maxAmp = juce::jmax (d->maxAmp, a);

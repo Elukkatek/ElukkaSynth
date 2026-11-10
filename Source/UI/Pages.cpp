@@ -1171,11 +1171,11 @@ void ResynthPage::resized()
 //==============================================================================
 SeqPage::SeqPage (ElukkaAudioProcessor& p)
     : proc (p),
-      on (p.apvts, "sq_on", "Sequencer On"), retrig (p.apvts, "sq_retrig", "Retrigger"), rate (p.apvts, "sq_rate", "Rate"),
+      on (p.apvts, "sq_on", "Sequencer On"), retrig (p.apvts, "sq_retrig", "Retrigger"), keepRs (p.apvts, "sq_keeprs", "Continue Sample"), rate (p.apvts, "sq_rate", "Rate"),
       gate (p.apvts, "sq_gate", "Gate"), slide (p.apvts, "sq_slide", "Slide Time"), accent (p.apvts, "sq_accent", "Accent"),
       grid (p)
 {
-    for (auto* c : std::initializer_list<juce::Component*> { &controls, &on, &retrig, &rate, &gate, &slide, &accent, &patternBox, &prevPattern, &nextPattern, &savePattern,
+    for (auto* c : std::initializer_list<juce::Component*> { &controls, &on, &retrig, &keepRs, &rate, &gate, &slide, &accent, &patternBox, &prevPattern, &nextPattern, &savePattern,
                                                               &length, &pitchCount, &startStep, &lengthLabel, &pitchLabel, &startLabel, &grid,
                                                               &randomize, &randomScale, &randomRange })
         addAndMakeVisible (c);
@@ -1195,6 +1195,8 @@ SeqPage::SeqPage (ElukkaAudioProcessor& p)
     randomRange.setTooltip ("How far up and down the random pitches may go");
     randomize.setTooltip ("New random pitch for every step (time, accents and slides stay)");
     retrig.button.setTooltip ("Every new note restarts the pattern from its start step. Off: the pattern follows the song position");
+    keepRs.button.setTooltip ("The resynth sample keeps playing through the sequencer's steps instead of restarting on each one; "
+                              "a new MIDI note restarts it from Position");
     randomize.onClick = [this] { randomizePitch(); };
 
     for (auto* s : { &length, &pitchCount, &startStep })
@@ -1342,7 +1344,12 @@ void SeqPage::resized()
     patRow.removeFromRight (3);
     patternBox.setBounds (patRow);
     patCol.removeFromTop (6);
-    savePattern.setBounds (patCol.removeFromTop (24).removeFromLeft (110));
+    {
+        auto saveRow = patCol.removeFromTop (24);
+        savePattern.setBounds (saveRow.removeFromLeft (110));
+        saveRow.removeFromLeft (6);
+        keepRs.setBounds (saveRow);
+    }
     row.removeFromLeft (14);
     auto lenCol = row.removeFromLeft (110);
     lengthLabel.setBounds (lenCol.removeFromTop (14));

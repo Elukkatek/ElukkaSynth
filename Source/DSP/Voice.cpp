@@ -16,7 +16,7 @@ void Voice::prepare (double sampleRate)
     active = false;
 }
 
-void Voice::start (int n, float vel, const VoiceContext& c, float glideSec, bool glideFromCurrent)
+void Voice::start (int n, float vel, const VoiceContext& c, float glideSec, bool glideFromCurrent, double rsStartTime)
 {
     note = n;
     velocity = vel;
@@ -56,8 +56,9 @@ void Voice::start (int n, float vel, const VoiceContext& c, float glideSec, bool
     if (! active) drift.reset (*c.rng);
     lastRsPos = juce::jlimit (0.0f, 1.0f, c.rsPos + lastOff[P::DstResPos]);
     rsTime = c.resynth != nullptr ? lastRsPos * c.resynth->durationSec : 0.0;
+    if (rsStartTime >= 0.0 && c.resynth != nullptr) rsTime = rsStartTime;
     rsSpeedLast = c.rsSpeed * (c.rsSync ? c.hostBpm / juce::jmax (1.0f, c.rsBpm) : 1.0);
-    posFading = false;
+    posFading = rsWrapped = fadeHoldsEnd = false;
     std::fill (std::begin (fmOut), std::end (fmOut), 0.0f);
     active = true;
     held = true;
@@ -252,16 +253,28 @@ void Voice::render (float* L, float* R, int n, const VoiceContext& c)
             lastRsPos = posNow;
             posJumped = posFading = true;
             posFadeDone = 0;
+            fadeHoldsEnd = false;
         }
+        else if (rsWrapped && ! posFading)
+        {
+            fadeTime = dur;   // setBlock holds a time past the end on the last frame
+            posJumped = posFading = fadeHoldsEnd = true;
+            posFadeDone = 0;
+        }
+        rsWrapped = false;
         rsT = wrap (rsTime);
-        fadeT = wrap (fadeTime);
+        fadeT = fadeHoldsEnd ? fadeTime : wrap (fadeTime);
         const float bpm = applyMod (ranges[P::DstRsBpm], c.rsBpm, off[P::DstRsBpm]);
         const double speed = applyMod (ranges[P::DstRsSpeed], c.rsSpeed, off[P::DstRsSpeed])
                              * (c.rsSync ? c.hostBpm / juce::jmax (1.0f, bpm) : 1.0);
         rsBlock = speed * n / sr;
         rsSpeedLast = speed;
         rsTime += rsBlock;
-        if (c.rsLoop && dur > 0.0 && rsTime >= dur) rsTime = std::fmod (rsTime, dur);
+        if (c.rsLoop && dur > 0.0 && rsTime >= dur)
+        {
+            rsTime = std::fmod (rsTime, dur);
+            rsWrapped = true;
+        }
         fadeTime += rsBlock;
     }
     else

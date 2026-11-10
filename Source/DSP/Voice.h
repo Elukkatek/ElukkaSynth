@@ -83,7 +83,8 @@ public:
     static constexpr int controlBlock = 128;
 
     void prepare (double sampleRate);
-    void start (int note, float velocity, const VoiceContext& c, float glideSec, bool glideFromCurrent);
+    // rsStartTime >= 0: the resynth sample starts there (source seconds) instead of at the Position knob
+    void start (int note, float velocity, const VoiceContext& c, float glideSec, bool glideFromCurrent, double rsStartTime = -1.0);
     void legatoTo (int note, float velocity, float glideSec);
     void release() { held = false; amp.noteOff(); filterEnv.noteOff(); }
     void kill() { active = false; amp.reset(); filterEnv.reset(); }
@@ -128,6 +129,9 @@ private:
     double fadeTime = 0.0;
     int posFadeSamples = 1, posFadeDone = 0;
     bool posFading = false;
+    // Loop wrap: the playhead passed the end in the previous block. The same crossfade then takes the loop's start in
+    // while the ending fades out held on its last frame (fadeHoldsEnd), so the loop keeps its exact length.
+    bool rsWrapped = false, fadeHoldsEnd = false;
     float fmOut[P::numOscs] {};
     // Sine banks rendered a block at a time (when nothing phase-modulates them): their left/right/mono output.
     // Allocated in prepare() (processors live on the stack in tests).
